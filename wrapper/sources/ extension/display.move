@@ -236,7 +236,7 @@ module wrapper::display {
             let base_u8_support = (canvas_width / size) * num_lines;
             let total_height = (size + 1) * num_lines;
             if (u8_length <= base_u8_support && total_height <= canvas_height) {
-                return (size, num_lines);
+                return (size, num_lines)
             };
             size = size - 1;
             num_lines = (u8_length + (canvas_width / size) - 1) / (canvas_width / size);
@@ -395,7 +395,7 @@ module wrapper::display {
         while (start + len <= vector::length(bytes)) {
             let sub_bytes = extract_subvector(bytes, start, len);
             if (string::try_utf8(sub_bytes).is_some()) {
-                return len;
+                return len
             };
             len = len + 1;
         };

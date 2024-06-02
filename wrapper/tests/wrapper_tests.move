@@ -157,7 +157,7 @@ module wrapper::wrapper_tests {
 
         debug::print(&w.count());
     
-        assert!(w.kind() == std::ascii::string(b"0000000000000000000000000000000000000000000000000000000000000000::wrapper::Wrapper"), 0);
+        assert!(w.kind() == std::ascii::string(b"9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730::wrapper::Wrapper"), 0);
 
         // take all
         let mut o = vector[];

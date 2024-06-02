@@ -215,7 +215,7 @@ module wrapper::display {
     public entry fun update_alias_display(w:&mut Wrapper,r:u64,g:u64,b:u64,base64:vector<u8>) {
         let (alias_span,_) = auto_create_svg_text_span(*w.alias().bytes(),18,60);
 
-        w.set_image(string::utf8( generate_svg(
+        w.set_content(string::utf8( generate_svg(
             base64,
             u64_to_bytes(r),
             u64_to_bytes(g),

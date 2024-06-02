@@ -9,9 +9,11 @@ module wrapper::wrapper {
     use sui::dynamic_field as df;
     use sui::display;
     use sui::package;
+    use sui::event;
+    use sui::balance::{Self,Balance};
+    use sui::sui::{SUI};
 
     // == tokenized ==
-    use std::option;
     use std::ascii;
     use sui::url::{Self};
     use sui::coin::{Self, Coin, TreasuryCap};
@@ -38,14 +40,20 @@ module wrapper::wrapper {
     const EWRAPPER_TOKENIZED_HAS_OWNER: u64 = 13;
     const ECANNOT_UNLOCK_NON_ZERO_SUPPLY: u64 = 14;
     const ETOKEN_SUPPLY_MISMATCH: u64 = 15;
+    const ENOT_INCEPTION_TOKENIZED_WRAPPER: u64 = 16;
+    const EINVALID_SUI_VALUE: u64 = 17;
 
     // ===== Wrapper Kind Constants =====
     const EMPTY_WRAPPER_KIND: vector<u8> = b"EMPTY WRAPPER";
     const INKSCRIPTION_WRAPPER_KIND: vector<u8> = b"INKSCRIPTION WRAPPER";
     const TOKENIZED_WRAPPER_KIND: vector<u8> = b"TOKENIZED WRAPPER";
+    const INCEPTION_WRAPPER_KIND: vector<u8> = b"INCEPTION WRAPPER";
 
-    // tokenized module name prefix
-    const WRAPPER_TOKENIZED_MODULE_PREFIX: vector<u8> = b"T_";
+
+    const SUI_MIST_PER_SUI: u64 = 1_000_000_000;
+
+    // inception wrapper object id
+    const INCEPTION_WRAPPER_OBJECT_ID: address = @0x6;
 
     // ===== Wrapper Core Struct =====
 
@@ -60,16 +68,33 @@ module wrapper::wrapper {
     /// - `kind`: ASCII string representing the type of objects the Wrapper can contain.
     /// - `alias`: UTF8 encoded string representing an alias for the Wrapper.
     /// - `items`: Vector of IDs or Other Bytes representing the objects wrapped.
-    /// - `image`: Image of the Wrapper.
+    /// - `content`: Image of the Wrapper.
     public struct Wrapper has key, store {
         id: UID,
         kind: std::ascii::String, //type of wrapped object
         alias: std::string::String, // alias for the Wrapper
         items: vector<vector<u8>>, // wrapped object ids
-        image: std::string::String, // image url for the Wrapper
+        content: std::string::String, // content url for the Wrapper
     }
 
     // ===== Inital functions =====
+
+    /// Event emitted when Wrapper Protocal is initialized.
+    public struct Init has copy,drop{
+        creater: address,
+        publisher: ID,
+        display: ID,
+        inception: ID,
+    }
+
+    /// Checks if the Wrapper is inception.
+    /// Parameters:
+    /// - `w`: Reference to the Wrapper.
+    /// Returns:
+    /// - True if the Wrapper is just create on init, false otherwise.
+    public fun is_inception(w: &Wrapper): bool {
+        w.kind == std::ascii::string(INCEPTION_WRAPPER_KIND)
+    }
 
     #[lint_allow(self_transfer)]
     /// Initializes a new Wrapper and sets up its display and publisher.
@@ -84,31 +109,38 @@ module wrapper::wrapper {
         let keys = vector[
             std::string::utf8(b"kind"),
             std::string::utf8(b"alias"),
-            std::string::utf8(b"items"),
             std::string::utf8(b"image_url"),
             std::string::utf8(b"project_url"),
         ];
         let values = vector[
             std::string::utf8(b"{kind}"),
             std::string::utf8(b"{alias}"),
-            std::string::utf8(b"{items}"),
-            std::string::utf8(b"{image}"),
+            std::string::utf8(b"{content}"),
             std::string::utf8(b"https://wrapper.space"),
         ];
         let mut display = display::new_with_fields<Wrapper>(&publisher,keys,values,ctx);
         display::update_version<Wrapper>(&mut display);
+        // Genesis Wrapper
+        let w  = inception(ctx);
+        event::emit(Init{
+                creater: tx_context::sender(ctx),
+                publisher: object::id(&publisher),
+                display: object::id(&display),
+                inception: object::id(&w),
+        });
+
         transfer::public_transfer(publisher, tx_context::sender(ctx));
         transfer::public_transfer(display, tx_context::sender(ctx));
-        // Genesis Wrapper
-        inception(ctx);
+        transfer::public_transfer(w, tx_context::sender(ctx));
     }
 
     /// Creates a new Wrapper with the INKSCRIPTION kind.
-    fun inception(ctx: &mut TxContext) {
+    fun inception(ctx: &mut TxContext):Wrapper {
         let mut inception = new(ctx);
         inception.kind = std::ascii::string(b"INCEPTION WRAPPER");
         inception.alias = std::string::utf8(b"The Dawn of Wrapper Protocol");
-        inception.image = std::string::utf8(b"https://ipfs.filebase.io/ipfs/QmYZgGG5QSegRZQg8p2MXMkzwdYLu6fWvLDCbFL8fhPNZX");
+        inception.content = std::string::utf8(b"https://ipfs.filebase.io/ipfs/QmYZgGG5QSegRZQg8p2MXMkzwdYLu6fWvLDCbFL8fhPNZX");
+        
         vector::push_back(&mut inception.items, b"In Genesis, the birth of vision's light,");
         vector::push_back(&mut inception.items, b"Prime movers seek the endless flight.");
         vector::push_back(&mut inception.items, b"Origin of dreams in tokens cast,");
@@ -138,11 +170,17 @@ module wrapper::wrapper {
         vector::push_back(&mut inception.items, b"Prime visions in Wrapper found.");
         vector::push_back(&mut inception.items, b"With every step, we redefine,");
         vector::push_back(&mut inception.items, b"A future bright, in Wrapper's line.");
-
-        transfer::public_transfer(inception, tx_context::sender(ctx));
+        inception
     }
 
     // ===== Basic Functions =====
+
+
+    /// Event emitted when Wrapper is created.
+    public struct Create has copy,drop{
+        creater: address,
+        id: ID,
+    }
 
     /// Creates a new, empty Wrapper.
     /// Parameters:
@@ -150,13 +188,24 @@ module wrapper::wrapper {
     /// Returns:
     /// - A new Wrapper with no items and a generic kind.
     public fun new(ctx: &mut TxContext): Wrapper {
+        let id = object::new(ctx);
+        event::emit(Create{
+            creater: tx_context::sender(ctx),
+            id: id.to_inner(),
+        });
         Wrapper {
-            id: object::new(ctx),
+            id: id,
             kind: std::ascii::string(EMPTY_WRAPPER_KIND),
             alias: std::string::utf8(EMPTY_WRAPPER_KIND),
             items: vector[],
-            image: std::string::utf8(b""),
+            content: std::string::utf8(b""),
         }
+    }
+
+    /// Event emitted when Wrapper is destroy.
+    public struct Destroy has copy,drop{
+        id: ID,
+        kind: std::ascii::String,
     }
 
     /// Destroys the Wrapper, ensuring it is empty before deletion.
@@ -170,7 +219,11 @@ module wrapper::wrapper {
         // remove all items from the Wrapper
         assert!(w.is_empty(), EWrapperNotEmpty);
         // delete the Wrapper
-        let Wrapper { id, kind: _, alias:_, items:_,  image:_ } = w;
+        let Wrapper { id, kind: kind, alias:_, items:_,  content:_ } = w;
+        event::emit(Destroy{
+            id: id.to_inner(),
+            kind: kind,
+        });
         id.delete();
     }
 
@@ -261,14 +314,14 @@ module wrapper::wrapper {
         w.alias = alias;
     }
 
-    /// Sets a new image for the Wrapper
+    /// Sets a new content for the Wrapper
     /// Parameters:
     /// - `w`: Mutable reference to the Wrapper.
-    /// - `image`: New image to set for the Wrapper.
+    /// - `content`: New content to set for the Wrapper.
     /// Effects:
-    /// - Updates the image field of the Wrapper.
-    public entry fun set_image(w: &mut Wrapper, image: std::string::String) {
-        w.image = image;
+    /// - Updates the content field of the Wrapper.
+    public entry fun set_content(w: &mut Wrapper, content: std::string::String) {
+        w.content = content;
     }
 
 
@@ -421,7 +474,10 @@ module wrapper::wrapper {
         assert!(w.is_same_kind<T>(), EItemNotSameKind);
         // unwrap all objects from the Wrapper
         while (w.count() > 0){
-            transfer::public_transfer(w.remove<T>(0), ctx.sender());
+            let id = object::id_from_bytes(w.item(0));
+            let object:T = dof::remove<Item,T>(&mut w.id, Item { id });
+            transfer::public_transfer(object, ctx.sender());
+            w.items.swap_remove(0);
         };
         // destroy the Wrapper
         w.destroy_empty();
@@ -580,10 +636,12 @@ module wrapper::wrapper {
 
     // =============== Tokenized Extension Functions ===============
 
-    public struct Lock has store, copy, drop {     
+    /// Represents a lock for a tokenized object.
+    public struct Lock has store {     
         id: ID,
         total_supply: u64,
         owner: Option<address>,
+        fund: Balance<SUI>,
     }
 
     // === Tokenized Public Check Functions ===
@@ -597,45 +655,13 @@ module wrapper::wrapper {
         assert!(w.kind == std::ascii::string(TOKENIZED_WRAPPER_KIND), ENOT_TOKENIZED_WRAPPER);
     }
 
-    /// Asserts that the given wrapper has a treasury.
-    /// Parameters:
-    /// - `wt`: Reference to the Wrapper.
-    /// - `id`: ID of the treasury item.
-    /// Errors:
-    /// - `EWRAPPER_TOKENIZED_NOT_TREASURY`: If the wrapper does not have a treasury.
-    fun have_treasury<T: drop>(wt: &Wrapper, id: ID) {
-        is_tokenized(wt);
-        assert!(dof::exists_with_type<Item, TreasuryCap<T>>(&wt.id, Item { id }) && wt.items.contains(&id.to_bytes()), EWRAPPER_TOKENIZED_NOT_TREASURY);
-    }
-
-    /// Asserts that the given wrapper has a lock.
-    /// Parameters:
-    /// - `wt`: Reference to the Wrapper.
-    /// Errors:
-    /// - `EWRAPPER_TOKENIZED_NOT_LOCK`: If the wrapper does not have a lock.
-    fun have_lock(wt: &Wrapper) {
-        is_tokenized(wt);
-        assert!(df::exists_with_type<Item, Lock>(&wt.id, Item { id:object::id(wt) }), EWRAPPER_TOKENIZED_NOT_LOCK);
-    }
-
-    /// Checks if the tokenized object type matches the witness type.
-    /// Parameters:
-    /// - `object`: Address of the object to check.
-    /// Errors:
-    /// - `EWRAPPER_TOKENIZED_MISMATCH`: If the object type does not match the witness type.
-    fun check_tokenized_object<T: drop>(object: address) {
-        let mut p = WRAPPER_TOKENIZED_MODULE_PREFIX;
-        vector::append<u8>(&mut p,object.to_ascii_string().into_bytes());
-        assert!(type_name::get_module(&type_name::get<T>()).into_bytes() == p, EWRAPPER_TOKENIZED_MISMATCH);
-    }
-    
     /// Asserts that the given wrapper has the specified wrapper item.
     /// Parameters:
     /// - `wt`: Reference to the Wrapper.
     /// - `id`: ID of the item to check.
     /// Errors:
     /// - `EWRAPPER_TOKENIZED_NOT_TOKENIZED`: If the wrapper does not contain the specified item.
-    fun has_wrapper(wt: &Wrapper, id: ID) {
+    public fun has_wrapper(wt: &Wrapper, id: ID) {
         is_tokenized(wt);
         assert!(dof::exists_with_type<Item, Wrapper>(&wt.id, Item { id }) && vector::contains<vector<u8>>(&wt.items,&id.to_bytes()) , EWRAPPER_TOKENIZED_NOT_TOKENIZED);
     }
@@ -646,7 +672,7 @@ module wrapper::wrapper {
     /// - `id`: ID of the item to check.
     /// Errors:
     /// - `EWRAPPER_TOKENIZED_HAS_TOKENIZED`: If the wrapper contains the specified item.
-    fun not_wrapper(wt: &Wrapper, id: ID) {
+    public fun not_wrapper(wt: &Wrapper, id: ID) {
         is_tokenized(wt);
         assert!(!dof::exists_with_type<Item, Wrapper>(&wt.id, Item { id }) && vector::contains<vector<u8>>(&wt.items,&id.to_bytes()) , EWRAPPER_TOKENIZED_HAS_TOKENIZED);
     }
@@ -663,138 +689,162 @@ module wrapper::wrapper {
         assert!(lock.owner.is_some() && ctx.sender() == lock.owner.borrow(),EWRAPPER_TOKENIZED_NOT_ACCESS)
     }
 
-    /// Asserts that the wrapper has no owner.
-    /// Parameters:
-    /// - `wt`: Reference to the Wrapper.
-    /// Errors:
-    /// - `EWRAPPER_TOKENIZED_HAS_OWNER`: If the wrapper has an owner.
-    fun not_owner(wt: &Wrapper) {
-        is_tokenized(wt);
-        let lock = df::borrow<Item,Lock>(&wt.id, Item { id: object::id(wt) });
-        assert!(lock.owner.is_none(), EWRAPPER_TOKENIZED_HAS_OWNER);
-    }
-
     // ===== Tokenized Public Entry functions =====
 
-
-    /// Registers a new tokenized object.
-    /// Parameters:
-    /// - `witness`: The witness type.
-    /// - `decimals`: Number of decimals for the token.
-    /// - `symbol`: Symbol of the token.
-    /// - `name`: Name of the token.
-    /// - `description`: Description of the token.
-    /// - `icon_url`: URL of the token's icon.
-    /// - `object`: Address of the object.
-    /// - `ctx`: Mutable reference to the transaction context.
-    public entry fun register<T: drop>(
-        witness: T,
-        decimals: u8,
-        symbol: vector<u8>,
-        name: vector<u8>,
-        description: vector<u8>,
-        icon_url: vector<u8>,
-        object: address,
-        ctx: &mut TxContext
-    ) {
-        // check tokenized object is equal to witness type name
-        check_tokenized_object<T>(object);
-        let icon_url = if (icon_url == b"") {
-            option::none()
-        } else {
-            option::some(url::new_unsafe_from_bytes(icon_url))
-        };
-        // create a new currency
-        let (treasury, metadata) = coin::create_currency(witness,decimals,symbol,name,description,icon_url,ctx);
-        transfer::public_freeze_object(metadata);
-
-        // share the tokenized object wrapper with the treasury
-        tokenized<T>(treasury,object,ctx);
+    /// Event emitted when a tokenized object is created.
+    public struct Tokenized<phantom T: drop> has copy, drop {
+        id: ID,
+        object: ID,
+        treasury: ID,
+        supply: u64,
+        deposit: u64,
     }
-
+    
     /// Tokenizes the given object with the specified treasury.
+    /// Treasury may be used to mint new tokens, and the object may be locked to prevent further minting.
+    /// there can fund the sui, and lock the object, and the owner can be withdraw the fund.
     /// Parameters:
     /// - `treasury`: The treasury.
     /// - `object`: Address of the object.
     /// - `ctx`: Mutable reference to the transaction context.
-    public entry fun tokenized<T: drop>(treasury:TreasuryCap<T>,object:address,ctx: &mut TxContext) {
-        check_tokenized_object<T>(object);
+    public entry fun tokenized<T: drop>(treasury:TreasuryCap<T>,object:address,mut sui:Coin<SUI>,wrapper:&mut Wrapper,ctx: &mut TxContext) {
+        is_tokenized(wrapper);
+        // TODO 
+        // let inception = INCEPTION_WRAPPER_OBJECT_ID;
+        // assert!(wrapper.item(0) == inception.to_bytes() , ENOT_INCEPTION_TOKENIZED_WRAPPER);
+
+        assert!(sui.value() >= 2 * SUI_MIST_PER_SUI, EINVALID_SUI_VALUE);
+
+        // create a new tokenized object wrapper
         let mut wt = new(ctx);
         wt.kind = std::ascii::string(TOKENIZED_WRAPPER_KIND);
         wt.alias = std::string::from_ascii(type_name::get_module(&type_name::get<T>()));
-        // core internal
+    
+        // some id
         let oid = object::id_from_address(object);
         let tid = object::id(&treasury);
         let wtid = object::id(&wt);
+
+        // emit event
+        event::emit(Tokenized<T> {
+            id: wtid,
+            object: oid,
+            treasury: tid,
+            supply: treasury.total_supply(),
+            deposit: sui.value()
+        });
+
+        // core internal
+        let vault = coin::split<SUI>(&mut sui,2 * SUI_MIST_PER_SUI,ctx);
+        stocking(wrapper,vault,ctx);
         df::add(&mut wt.id,
-            Item{ id: wtid },
+            Item { id: wtid },
             Lock { 
                 id: oid,
-                owner: option::none(),
-                total_supply: 0,
+                owner: option::some(ctx.sender()),
+                total_supply: treasury.total_supply(),
+                fund: sui.into_balance()
             }
         );
         // add items ,but not dof add item,means not add to the object store
         wt.items.push_back(oid.to_bytes());
         // dof::add(&mut wt.id, Item{ id: oid }, wrapper_tokenized);
+        
         // add treasury,means the treasury is in the object store
         wt.items.push_back(tid.to_bytes());
         dof::add(&mut wt.id, Item{ id: tid }, treasury);
 
+        // share the tokenized object wrapper with the treasury
         transfer::public_share_object(wt);
     }
+    
+    #[lint_allow(self_transfer)]
+    public entry fun detokenized<T: drop>(mut wt: Wrapper, ctx: &mut TxContext) {
+        // check has access
+        has_access(&wt,ctx);
+        
+        // transfer treasury to sender
+        let treasury_id = object::id_from_bytes(wt.item(1));
+        let treasury:TreasuryCap<T> = dof::remove<Item,TreasuryCap<T>>(&mut wt.id, Item { id: treasury_id });
+        transfer::public_transfer(treasury, tx_context::sender(ctx));
 
+        // transfer fund to sender and delete Lock
+        let wtid = object::id(&wt);
+        let Lock { id:_,owner:_,total_supply:_,fund} = df::remove<Item,Lock>(&mut wt.id, Item { id: wtid });
+        transfer::public_transfer(coin::from_balance<SUI>(fund,ctx), tx_context::sender(ctx));
+
+        // delete the tokenized object wrapper
+        wt.items.swap_remove(0);
+        wt.items.swap_remove(0);
+        wt.destroy_empty();
+    }
+    
+
+    public entry fun stocking(wt:&mut Wrapper,sui:Coin<SUI>,ctx: &mut TxContext) {
+        is_tokenized(wt);
+        let wtid = object::id(wt);
+        let mut lock = df::borrow_mut<Item,Lock>(&mut wt.id, Item { id: wtid });
+        lock.fund.join<SUI>(sui.into_balance());
+    }
+
+
+    #[lint_allow(self_transfer)]
     /// Locks the given wrapper with the specified total supply.
+    /// Lock the wrapper with the total supply, and transfer the SUI fund to the sender.
     /// Parameters:
     /// - `wt`: Mutable reference to the Wrapper.
     /// - `total_supply`: Total supply of the token.
     /// - `w`: The Wrapper to lock.
     /// - `ctx`: Mutable reference to the transaction context.
-    public entry fun lock<T: drop>(wt: &mut Wrapper,total_supply:u64, w: Wrapper, ctx: &mut TxContext) {
+    public entry fun lock<T: drop>(wt:& mut Wrapper,total_supply:u64, o: Wrapper, ctx: &mut TxContext) {
         // check if wrapper is not locked,must be none
-        not_wrapper(wt,object::id(&w));
-        // check if wrapper id is equal to tokenized_object
-        not_owner(wt);
+        not_wrapper(wt,object::id(&o));
+        // lock total supply of tokenized wrapper must bigger than current supply
+        let lock_total_supply = total_supply(wt);
+        assert!(lock_total_supply <= total_supply, ETOKEN_SUPPLY_MISMATCH);
 
-        // fill the wrapper and owner
-        dof::add(&mut wt.id, Item{ id: object::id(&w) }, w);
-
-        // fill the lock
-        have_lock(wt);
+        // fill the lock owner and total_supply
         let wtid = object::id(wt);
         let mut lock = df::borrow_mut<Item,Lock>(&mut wt.id, Item { id: wtid });
-        option::fill(&mut lock.owner, ctx.sender());
-        // mint total supply of tokenized wrapper
         lock.total_supply = total_supply;
+        // fill the owner
+        option::fill(&mut lock.owner, ctx.sender());
+        // withdraw SUI fund to the sender
+        transfer::public_transfer(coin::from_balance<SUI>(balance::withdraw_all(&mut lock.fund),ctx), ctx.sender());
+        
+        // fill the wrapper and owner
+        dof::add(&mut wt.id, Item{ id: object::id(&o) }, o);
     }
 
+    #[lint_allow(self_transfer)]
     /// Unlocks the given wrapper.
+    /// Unlocks the wrapper by burning the total supply of the tokenized wrapper and transferring the ownership of the locked wrapper to the sender.
+    /// The total supply must match the treasury supply, and the total supply must be zero.
+    /// If user lock wrapper to withdraw the SUI, the hacker must burn all the token to unlock the wrapper.
+    /// So user can reserve the token,avoid the hacker to withdraw the SUI,and unlock the wrapper.
     /// Parameters:
     /// - `wt`: Mutable reference to the Wrapper.
     /// - `ctx`: Mutable reference to the transaction context.
     /// Errors:
     /// - `ETOKEN_SUPPLY_MISMATCH`: If the total supply does not match the treasury supply.
     /// - `ECANNOT_UNLOCK_NON_ZERO_SUPPLY`: If the total supply is not zero.
-    public entry fun unlock<T: drop>(wt: &mut Wrapper, ctx: &mut TxContext) {
+    public entry fun unlock<T: drop>(mut wt: Wrapper, ctx: &mut TxContext) {
         // check has access
-        has_access(wt,ctx);
+        has_access(&wt,ctx);
         // burn total supply of tokenized wrapper to unlock wrapper
-        let total_supply = total_supply(wt);
-        let treasury_supply = supply<T>(wt);
+        let total_supply = total_supply(&wt);
+        let treasury_supply = treasury_supply<T>(&wt);
         assert!(total_supply == treasury_supply, ETOKEN_SUPPLY_MISMATCH);
         assert!(total_supply == 0, ECANNOT_UNLOCK_NON_ZERO_SUPPLY);
 
-        // transfer ownership to sender
+        // transfer locked wrapper ownership to sender
         let object_id = object::id_from_bytes(wt.item(0));
-        has_wrapper(wt,object_id);
+        has_wrapper(&wt,object_id);
         let object: Wrapper = dof::remove<Item,Wrapper>(&mut wt.id, Item { id:object_id });
         transfer::public_transfer(object, tx_context::sender(ctx));
 
-        // clear owner
-        have_lock(wt);
-        let wtid = object::id(wt);
-        let mut lock = df::borrow_mut<Item,Lock>(&mut wt.id, Item { id: wtid });
-        option::extract(&mut lock.owner);
+        // detokenized the wrapper
+        detokenized<T>(wt,ctx);
     }
 
     /// Mints new tokens for the given wrapper.
@@ -807,14 +857,14 @@ module wrapper::wrapper {
     public entry fun mint<T:drop>(wt: &mut Wrapper, value: u64, ctx: &mut TxContext) {
         // check has access
         has_access(wt,ctx);
+
         // check if total supply is less than max supply
         let total_supply = total_supply(wt);
-        let treasury_supply = supply<T>(wt);
-        assert!(value + treasury_supply < total_supply, ETOKEN_SUPPLY_MISMATCH);
+        let treasury_supply = treasury_supply<T>(wt);
+        assert!(value + treasury_supply <= total_supply, ETOKEN_SUPPLY_MISMATCH);
 
         // mint token
         let treasury_id = object::id_from_bytes(wt.item(1));
-        have_treasury<T>(wt,treasury_id);
         let mut treasury = dof::borrow_mut<Item,TreasuryCap<T>>(&mut wt.id, Item { id: treasury_id });
         let token = coin::mint(treasury, value, ctx);
 
@@ -828,16 +878,13 @@ module wrapper::wrapper {
     /// - `c`: The Coin to burn.
     public entry fun burn<T:drop>(wt: &mut Wrapper, c: Coin<T>) {
         is_tokenized(wt);
-
         // burn token
         let treasury_id = object::id_from_bytes(wt.item(1));
-        have_treasury<T>(wt,treasury_id);
         let burn_value = c.value();
         let mut treasury = dof::borrow_mut<Item,TreasuryCap<T>>(&mut wt.id, Item { id: treasury_id });
         coin::burn(treasury, c);
         
         // update total supply
-        have_lock(wt);
         let wtid = object::id(wt);
         let mut lock = df::borrow_mut<Item,Lock>(&mut wt.id, Item { id: wtid });
         lock.total_supply = lock.total_supply - burn_value;
@@ -849,7 +896,7 @@ module wrapper::wrapper {
     /// Returns: 
     /// - The total supply.
     public fun total_supply(wt: &Wrapper): u64 {
-        have_lock(wt);
+        is_tokenized(wt);
         let lock = df::borrow<Item,Lock>(&wt.id, Item { id: object::id(wt) });
         lock.total_supply
     }
@@ -859,10 +906,9 @@ module wrapper::wrapper {
     /// - `wt`: Reference to the Wrapper.
     /// Returns: 
     /// - The current supply.
-    public fun supply<T:drop>(wt: &Wrapper): u64 {
+    public fun treasury_supply<T:drop>(wt: &Wrapper): u64 {
         is_tokenized(wt);
         let treasury_id = object::id_from_bytes(wt.item(1));
-        have_treasury<T>(wt,treasury_id);
         let treasury = dof::borrow<Item,TreasuryCap<T>>(&wt.id, Item { id: treasury_id });
         treasury.total_supply()
     }

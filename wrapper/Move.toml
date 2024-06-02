@@ -6,7 +6,7 @@ authors = ["Euraxluo (euraxluo@outlook.com)"]
 version = "0.1.0"
 
 # testnet published-at 0x9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730
-published-at = "0x9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730"
+# published-at = "0x9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730"
 
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
@@ -14,5 +14,5 @@ Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-fram
 
 [addresses]
 # testnet "0x9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730"
-wrapper = "0x9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730"
-# wrapper = "0x0"
+# wrapper = "0x9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730"
+wrapper = "0x0"

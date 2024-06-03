@@ -341,6 +341,12 @@ module wrapper::wrapper {
 
     // ===== Ink Public Entry functions =====
     
+    /// Event emitted when some ink is scribe to the Wrapper.
+    public struct Scribing has copy,drop{
+        id: ID,
+        inks: u64,
+    }
+
     /// Appends an ink inscription to the Wrapper.
     /// Ensures that the operation is type-safe and the Wrapper is either empty or already contains ink inscriptions.
     /// Parameters:
@@ -353,10 +359,19 @@ module wrapper::wrapper {
         if (w.is_empty()) {
             w.kind = std::ascii::string(INKSCRIPTION_WRAPPER_KIND)
         };
+        event::emit(Scribing{
+            id: object::id(w),
+            inks: ink.length(),
+        });
         while (ink.length() > 0){
             vector::push_back(&mut w.items, *ink.pop_back().bytes());
         };
         ink.destroy_empty();
+    }
+
+    /// Event emitted when some ink is erased from the Wrapper.
+    public struct Erase has copy,drop{
+        id: ID,
     }
 
     /// Removes an ink inscription from the Wrapper at a specified index.
@@ -374,6 +389,9 @@ module wrapper::wrapper {
         if (w.count() == 0) {
             w.kind = std::ascii::string(EMPTY_WRAPPER_KIND)
         };
+        event::emit(Erase{
+            id: object::id(w),
+        });
     }
 
     /// Shred all ink inscriptions in the Wrapper, effectively clearing it.
@@ -446,6 +464,12 @@ module wrapper::wrapper {
 
     // ===== Object Public Entry functions =====
     
+    /// Event emitted when an object is wrapped.
+    public struct Wraping has copy,drop{
+        id: ID,
+        kind: std::ascii::String,
+    }
+
     /// Wraps object list into a new Wrapper.
     /// Parameters:
     /// - `w`: The Wrapper to unwrap.
@@ -484,6 +508,12 @@ module wrapper::wrapper {
         w.destroy_empty();
     }
 
+    /// Event emitted when an object is added to the Wrapper.
+    public struct Adding has copy,drop{
+        id: ID,
+        object: ID,
+    }
+
     /// Adds a single object to the Wrapper. If the Wrapper is empty, sets the kind based on the object's type.
     /// Parameters:
     /// - `w`: Mutable reference to the Wrapper.
@@ -499,6 +529,10 @@ module wrapper::wrapper {
         } else {
             assert!(w.is_same_kind<T>(), EItemNotSameKind)
         };
+        event::emit(Adding{
+            id: object::id(w),
+            object: object::id(&object),
+        });
         // add the object to the Wrapper
         let oid = object::id(&object);
         dof::add(&mut w.id, Item{ id: oid }, object);
@@ -524,6 +558,12 @@ module wrapper::wrapper {
 
     // ===== Object Internal functions =====
     
+    /// Event emitted when an object is removed from the Wrapper.
+    public struct Removes has copy,drop{
+        id: ID,
+        object: ID,
+    }
+
     /// Removes an object from the Wrapper at a specified index and returns it.
     /// Checks that the operation is type-safe.
     /// Parameters:
@@ -546,6 +586,10 @@ module wrapper::wrapper {
         if (w.count() == 0) {
             w.kind = std::ascii::string(EMPTY_WRAPPER_KIND)
         };
+        event::emit(Removes{
+            id: object::id(w),
+            object: object::id(&object),
+        });
         object
     }
 
@@ -684,7 +728,7 @@ module wrapper::wrapper {
     /// - `ctx`: Reference to the transaction context.
     /// Errors:
     /// - `EWRAPPER_TOKENIZED_NOT_ACCESS`: If the caller does not have access.
-    fun has_access(wt: &Wrapper, ctx: &TxContext) {
+    public fun has_access(wt: &Wrapper, ctx: &TxContext) {
         is_tokenized(wt);
         let lock = df::borrow<Item,Lock>(&wt.id, Item { id: object::id(wt) });
         assert!(lock.owner.is_some() && ctx.sender() == lock.owner.borrow(),EWRAPPER_TOKENIZED_NOT_ACCESS)
@@ -693,7 +737,7 @@ module wrapper::wrapper {
     // ===== Tokenized Public Entry functions =====
 
     /// Event emitted when a tokenized object is created.
-    public struct Tokenized<phantom T: drop> has copy, drop {
+    public struct Tokenization<phantom T: drop> has copy, drop {
         id: ID,
         object: ID,
         treasury: ID,
@@ -733,7 +777,7 @@ module wrapper::wrapper {
         let wtid = object::id(&wt);
 
         // emit event
-        event::emit(Tokenized<T> {
+        event::emit(Tokenization<T> {
             id: wtid,
             object: o,
             treasury: tid,
@@ -792,6 +836,12 @@ module wrapper::wrapper {
         wt.destroy_empty();
     }
     
+    /// Event emitted when stocking additional funds into a tokenized object wrapper.
+    public struct Stocking has copy, drop {
+        id: ID,
+        value: u64,
+        fund: u64,
+    }
 
     /// Stocks additional funds into a tokenized object wrapper.
     /// Parameters:
@@ -802,7 +852,20 @@ module wrapper::wrapper {
         is_tokenized(wt);
         let wtid = object::id(wt);
         let mut lock = df::borrow_mut<Item,Lock>(&mut wt.id, Item { id: wtid });
+        let value = sui.value();
         lock.fund.join<SUI>(sui.into_balance());
+        event::emit(Stocking{
+            id: wtid,
+            value: value,
+            fund: lock.fund.value()
+        });
+    }
+
+    /// Event emitted when withdrawing funds from a tokenized object wrapper.
+    public struct Withdraw has copy, drop {
+        id: ID,
+        value: u64,
+        fund: u64,
     }
 
     /// Withdraws funds from a tokenized object wrapper.
@@ -826,10 +889,21 @@ module wrapper::wrapper {
         assert!(lock.fund.value() >= value, EINSUFFICIENT_BALANCE);
         // Split the specified amount from the fund
         let c = coin::from_balance<SUI>(lock.fund.split<SUI>(value), ctx);
+        event::emit(Withdraw{
+            id: wtid,
+            value: value,
+            fund: lock.fund.value()
+        });
         // Transfer the withdrawn funds to the sender
         transfer::public_transfer(c, ctx.sender());
     }
 
+    /// Event emitted when locking a tokenized object wrapper.
+    public struct Locking has copy, drop {
+        id: ID,
+        sender: address,
+        withdraw: u64,
+    }
 
     #[lint_allow(self_transfer)]
     /// Locks the given wrapper with the specified total supply.
@@ -846,9 +920,13 @@ module wrapper::wrapper {
         let mut lock = df::borrow_mut<Item,Lock>(&mut wt.id, Item { id: wtid });
         // fill the owner
         option::fill(&mut lock.owner, ctx.sender());
+        event::emit(Locking{
+            id: wtid,
+            sender: ctx.sender(),
+            withdraw: lock.fund.value()
+        });
         // withdraw SUI fund to the sender
         transfer::public_transfer(coin::from_balance<SUI>(balance::withdraw_all(&mut lock.fund),ctx), ctx.sender());
-        
         // fill the wrapper and owner
         dof::add(&mut wt.id, Item{ id: object::id(&o) }, o);
     }

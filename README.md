@@ -86,7 +86,7 @@ coin  working
 
 
 
-### Lsaunchpad & `Wrapper to Earn`
+### Launchpad & `Wrapper to Earn`
 
 1. Wrappers are free, only gas fees are required.
     Protocol tokens are distributed based on daily wrapping volume, sourced from the monetization of the first wrapper. Token name: wrap.

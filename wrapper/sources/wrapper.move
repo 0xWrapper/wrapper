@@ -5,6 +5,7 @@
 /// This module includes functionalities to wrap, unwrap, merge, split, and manage items in a Wrapper.
 /// It handles different kinds of objects and ensures that operations are type-safe.
 module wrapper::wrapper {
+    use std::ascii;
     use std::type_name;
     use sui::dynamic_object_field as dof;
     use sui::dynamic_field as df;
@@ -19,21 +20,20 @@ module wrapper::wrapper {
     use sui::sui::{SUI};
 
     // == vesting ==
-    use sui::hash::{keccak256, blake2b256};
+    use sui::hash::{ blake2b256};
 
     // == tokenized ==
     use std::vector::{Self};
     use std::option;
     use std::string;
-    use std::ascii;
-    use sui::address;
     use sui::bcs;
     use sui::clock;
-    use sui::url::{Self};
     use sui::coin::{Self, Coin, TreasuryCap};
-    use sui::hex;
     use sui::object::ID;
     use sui::transfer::public_transfer;
+
+    // == vault ==
+    use sui::transfer::{ Receiving};
 
 
     // ===== Error Codes =====
@@ -79,12 +79,20 @@ module wrapper::wrapper {
     const EVestingNotSameKind: u64 = 25;
     const EInvalidVestingSyncCall: u64 = 25;
 
+    // ====== Vault Error Codes =====
+    const ENOT_VAULT_WRAPPER: u64 = 25;
+    const EWrapperNotEmptyOrVault: u64 = 25;
+    const EAssetNotFoundInVault: u64 = 25;
+    const ECurrencyNotFoundInVault: u64 = 25;
+    const ECurrencyNotEnoughFoundInVault: u64 = 25;
+
     // ===== Wrapper Kind Constants =====
     const EMPTY_WRAPPER_KIND: vector<u8> = b"EMPTY WRAPPER";
     const INKSCRIPTION_WRAPPER_KIND: vector<u8> = b"INKSCRIPTION WRAPPER";
     const TOKENIZED_WRAPPER_KIND: vector<u8> = b"TOKENIZATION WRAPPER";
     const INCEPTION_WRAPPER_KIND: vector<u8> = b"INCEPTION WRAPPER";
     const VESTING_WRAPPER_KIND: vector<u8> = b"VESTING WRAPPER";
+    const VAULT_WRAPPER_KIND: vector<u8> = b"VAULT WRAPPER";
 
 
     const SUI_MIST_PER_SUI: u64 = 1_000_000_000;
@@ -1115,7 +1123,6 @@ module wrapper::wrapper {
 
     // =============== Vesting Extension Functions ===============
 
-
     public struct VestingLock<phantom T> has store {
         id: ID,
         initial: Balance<T>,
@@ -1149,7 +1156,7 @@ module wrapper::wrapper {
         object::id_from_bytes(blake2b256(&v_bcs))
     }
 
-    public entry fun vesting<T>(w: &mut Wrapper, start: u64, initial: u64, cliff: u64, vesting: u64, cycle: u64, ) {
+    public entry fun vesting<T>(w: &mut Wrapper, start: u64, initial: u64, cliff: u64, vesting: u64, cycle: u64) {
         assert!(w.is_vesting() || w.is_empty(), EWrapperNotEmptyOrVesting);
         assert!(cycle >= 86_400_000, ECycleMustBeAtLeastOneDay); // 确保周期至少为一天
         assert!(cycle % 86_400_000 == 0, ECycleMustBeMultipleOfDay); // 确保周期是一天毫秒数的倍数
@@ -1272,16 +1279,16 @@ module wrapper::wrapper {
         );
         // 创建一个提取balance
         let mut claim_balance = balance::zero<T>();
-        // claim initial amount
-        if (vesting_lock.initial.value() > 0) {
-            claim_balance.join(vesting_lock.initial.withdraw_all());
-        };
-
         // 计算下个周期应该释放的代币数量
         let cycle_realse_balance = if ((vesting - vesting_lock.claimed) <= cliff) {
             vesting_lock.vesting.value()
         }else {
             vesting_lock.vesting.value() / (vesting - cliff - vesting_lock.claimed)
+        };
+
+        // claim initial amount
+        if (vesting_lock.initial.value() > 0) {
+            claim_balance.join(vesting_lock.initial.withdraw_all());
         };
 
         // 如果具有有效可提取周期
@@ -1377,5 +1384,90 @@ module wrapper::wrapper {
                 }
             }
         }
+    }
+
+    // =============== Account Extension Functions ===============
+    public fun is_vault(w: &Wrapper):bool {
+        w.kind == std::ascii::string(VAULT_WRAPPER_KIND)
+    }
+
+    public struct CurrencyVault<phantom T> has copy, drop, store {}
+
+    public struct AssetVault<phantom T> has copy, drop, store { id: ID }
+
+    public entry fun acquire<T: key + store>(w: &mut Wrapper, assert: Receiving<T>) {
+        assert!(w.is_empty() || w.is_vault(), EWrapperNotEmptyOrVault);
+        let sent_assert = transfer::public_receive(&mut w.id, assert);
+        if (w.is_empty()) {
+            w.kind = ascii::string(VAULT_WRAPPER_KIND);
+        };
+        let assert_id = object::id(&sent_assert);
+        let assert_type = AssetVault<T> { id: assert_id };
+        let wid = &mut w.id;
+        w.items.push_back(assert_id.id_to_bytes());
+        dof::add(wid, assert_type, sent_assert);
+    }
+
+    public entry fun receipts<T>(w: &mut Wrapper, currency: Receiving<Coin<T>>) {
+        assert!(w.is_empty() || w.is_vault(), EWrapperNotEmptyOrVault);
+        let coin = transfer::public_receive(&mut w.id, currency);
+        if (w.is_empty()) {
+            w.kind = ascii::string(VAULT_WRAPPER_KIND);
+        };
+        let balance_type = CurrencyVault<T> {};
+        let wid = &mut w.id;
+        if (df::exists_(wid, balance_type)) {
+            let balance: &mut Coin<T> = df::borrow_mut(wid, balance_type);
+            coin::join(balance, coin);
+        } else {
+            w.items.push_back(object::id(&coin).id_to_bytes());
+            df::add(wid, balance_type, coin);
+        }
+    }
+
+    /// 提取资产的函数
+    public entry fun extract<T: key + store>(w: &mut Wrapper, asset_id: ID, ctx: &mut TxContext) {
+        // 确保 Wrapper 是空的或类型是 Vault
+        assert!(w.is_empty() || w.is_vault(), EWrapperNotEmptyOrVault);
+        assert!(vector::contains(&w.items, &asset_id.id_to_bytes()), EAssetNotFoundInVault);
+
+        // 检查资产是否存在于 Wrapper 中
+        let asset_type = AssetVault<T> { id: asset_id };
+        let wid = &mut w.id;
+        assert!(dof::exists_(wid, asset_type), EAssetNotFoundInVault);
+
+        // 转移资产到请求者
+        let asset = dof::remove<AssetVault<T>, T>(wid, asset_type);
+        transfer::public_transfer(asset, ctx.sender());
+        // 从 Wrapper 中移除资产
+        let (_, index) = vector::index_of(&w.items, &asset_id.id_to_bytes());
+        w.items.swap_remove(index);
+    }
+
+    /// 提取货币的函数
+    public entry fun retrieve<T: key + store>(w: &mut Wrapper, amount: u64, ctx: &mut TxContext) {
+        // 确保 Wrapper 是空的或类型是 Vault
+        assert!(w.is_empty() || w.is_vault(), EWrapperNotEmptyOrVault);
+
+        // 检查余额是否存在
+        let balance_type = CurrencyVault<T> {};
+        let wid = &mut w.id;
+        assert!(df::exists_(wid, balance_type), ECurrencyNotFoundInVault);
+
+        // 获取当前余额并确保有足够的资金
+        let balance: &mut Coin<T> = df::borrow_mut(wid, balance_type);
+        assert!(coin::value(balance) >= amount, ECurrencyNotEnoughFoundInVault);
+
+        // 分割并移除指定数量的货币
+        let coin_to_retrieve = coin::split(balance, amount, ctx);
+        if (coin::value(balance) == 0) {
+            let currency = df::remove<CurrencyVault<T>, Coin<T>>(wid, balance_type);
+            let (has, index) = vector::index_of(&w.items, &object::id(&currency).id_to_bytes());
+            assert!(has, ECurrencyNotFoundInVault);
+            w.items.swap_remove(index);
+            coin::destroy_zero(currency);
+        };
+        // 转移货币到请求者
+        transfer::public_transfer(coin_to_retrieve, ctx.sender());
     }
 }

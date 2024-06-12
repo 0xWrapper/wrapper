@@ -74,16 +74,12 @@ any object wrapper
 - `unwrap<T: store + key>(mut w: Wrapper, ctx: &mut TxContext)`
 - `add<T: store + key>(w: &mut Wrapper, object: T)`
 - `shift<T: store + key>(self: &mut Wrapper, w: &mut Wrapper)`
-- `remove<T: store + key>(w: &mut Wrapper, i: u64): T`
-- `take<T: store + key>(w: &mut Wrapper, id: ID): T`
 
 
-### voucherization Wrapper/ 
+### vesting Wrapper
 coin locked (SAFT:Simple Agreement for Tokens)
 
 coin  working
-
-
 
 
 ### Lsaunchpad & `Wrapper to Earn`

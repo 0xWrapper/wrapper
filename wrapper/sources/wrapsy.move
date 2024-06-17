@@ -5,10 +5,15 @@ module wrapper::wrapsy {
     use wrapper::wrapper::{Wrapper, new};
 
     // ===== Error Codes =====
-    const EItemNotFound: u64 = 0;
-    const EIndexOutOfBounds: u64 = 1;
-    const EItemNotSameKind: u64 = 2;
-    const EItemNotFoundOrNotSameKind: u64 = 3;
+    const EWrapperTakeInvalidItemOrKind: u64 = 0;
+    const EWrapperRemoveInvalidItemIndex: u64 = 1;
+    const EWrapperWrapAllowedEmptyOrSameKind: u64 = 2;
+    const EWrapperUnwrapAllowedEmptyOrSameKind: u64 = 3;
+    const EWrapperBorrowInvalidItemOrKind: u64 = 4;
+    const EWrapperAddInvalidObjectKind: u64 = 5;
+    const EWrapperShiftInvalidWrapperKind: u64 = 6;
+    const EWrapperRemoveInvalidItemOrKind: u64 = 7;
+    const EWrapperSplitInvalidItemsOrKind: u64 = 8;
 
 
     // =============== Object Extension Functions ===============
@@ -51,7 +56,7 @@ module wrapper::wrapsy {
     /// - `EItemNotFoundOrNotSameKind`: If no item exists at the index or if the item is not of type T.
     public fun borrow<T: store + key>(w: &Wrapper, i: u64): &T {
         let id = object::id_from_bytes(w.item(i));
-        assert!(has_item_with_type<T>(w, id), EItemNotFoundOrNotSameKind);
+        assert!(has_item_with_type<T>(w, id), EWrapperBorrowInvalidItemOrKind);
         w.borrow_object<Item, T>(Item { id })
     }
 
@@ -66,7 +71,7 @@ module wrapper::wrapsy {
     /// - `EItemNotFoundOrNotSameKind`: If no item exists at the index or if the item is not of type T.
     public fun borrow_mut<T: store + key>(w: &mut Wrapper, i: u64): &mut T {
         let id = object::id_from_bytes(w.item(i));
-        assert!(has_item_with_type<T>(w, id), EItemNotFoundOrNotSameKind);
+        assert!(has_item_with_type<T>(w, id), EWrapperBorrowInvalidItemOrKind);
         w.mutate_object<Item, T>(Item { id })
     }
 
@@ -88,7 +93,7 @@ module wrapper::wrapsy {
     /// Errors:
     /// - `EItemNotSameKind`: If any contained item is not of type T.
     public entry fun wrap<T: store + key>(w: &mut Wrapper, mut objects: vector<T>) {
-        assert!(is_same_kind<T>(w), EItemNotSameKind);
+        assert!(w.is_empty() || is_same_kind<T>(w), EWrapperWrapAllowedEmptyOrSameKind);
         // add the object to the Wrapper
         while (objects.length() > 0) {
             add(w, objects.pop_back());
@@ -116,7 +121,7 @@ module wrapper::wrapsy {
     /// Errors:
     /// - `EItemNotSameKind`: If any contained item is not of type T.
     public entry fun unwrap<T: store + key>(mut w: Wrapper, ctx: &mut TxContext) {
-        assert!(is_same_kind<T>(&w), EItemNotSameKind);
+        assert!(is_same_kind<T>(&w) || w.is_empty(), EWrapperUnwrapAllowedEmptyOrSameKind);
         // unwrap all objects from the Wrapper
         while (w.count() > 0) {
             let id = object::id_from_bytes(w.item(0));
@@ -147,7 +152,7 @@ module wrapper::wrapsy {
         if (w.is_empty()) {
             w.set_kind(type_name::into_string(type_name::get<T>()));
         } else {
-            assert!(is_same_kind<T>(w), EItemNotSameKind)
+            assert!(is_same_kind<T>(w), EWrapperAddInvalidObjectKind)
         };
         event::emit(Adding {
             id: object::id(w),
@@ -170,7 +175,7 @@ module wrapper::wrapsy {
     /// Errors:
     /// - `EItemNotSameKind`: If the Wrappers do not contain the same type of items.
     public entry fun shift<T: store + key>(self: &mut Wrapper, w: &mut Wrapper) {
-        assert!(is_same_kind<T>(self), EItemNotSameKind);
+        assert!(is_same_kind<T>(self), EWrapperShiftInvalidWrapperKind);
         while (self.count() > 0) {
             add(w, remove<T>(self, 0));
         };
@@ -196,8 +201,8 @@ module wrapper::wrapsy {
     /// Errors:
     /// - `EItemNotSameKind`: If the item type does not match the Wrapper's kind.
     public(package) fun remove<T: store + key>(w: &mut Wrapper, i: u64): T {
-        assert!(w.count() > i, EIndexOutOfBounds);
-        assert!(is_same_kind<T>(w), EItemNotSameKind);
+        assert!(w.count() > i, EWrapperRemoveInvalidItemIndex);
+        assert!(is_same_kind<T>(w), EWrapperRemoveInvalidItemOrKind);
         // remove the item from the Wrapper
         let id = object::id_from_bytes(w.item(i));
         let object: T = w.remove_object<Item, T>(Item { id });
@@ -220,13 +225,13 @@ module wrapper::wrapsy {
     /// Errors:
     /// - `EItemNotFound`: If no item with the specified ID exists.
     public(package) fun take<T: store + key>(w: &mut Wrapper, id: ID): T {
-        assert!(has_item_with_type<T>(w, id), EItemNotFound);
+        assert!(has_item_with_type<T>(w, id), EWrapperTakeInvalidItemOrKind);
         // remove the item from the Wrapper
         let (has_item, index) = w.items().index_of(&id.to_bytes());
         if (has_item) {
             remove(w, index)
         }else {
-            abort EItemNotFound
+            abort EWrapperTakeInvalidItemOrKind
         }
     }
 
@@ -289,7 +294,7 @@ module wrapper::wrapsy {
         let mut w2 = new(ctx);
         // take the objects from the first Wrapper and add them to the second Wrapper
         while (ids.length() > 0) {
-            assert!(has_item_with_type<T>(w, ids[ids.length() - 1]), EItemNotFoundOrNotSameKind);
+            assert!(has_item_with_type<T>(w, ids[ids.length() - 1]), EWrapperSplitInvalidItemsOrKind);
             add(&mut w2, take<T>(w, ids.pop_back()));
         };
         ids.destroy_empty();

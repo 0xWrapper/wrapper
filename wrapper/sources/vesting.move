@@ -183,7 +183,6 @@ module wrapper::vesting {
         w.destroy_empty();
     }
 
-    // 分割 vesting
     #[allow(unused_mut)]
     /// Splits the vesting schedule into a new wrapper with the specified amount.
     /// Parameters:
@@ -247,9 +246,9 @@ module wrapper::vesting {
         assert!(now >= vschedule.start, EVestingWrapperClaimAllowedAfterScheduleStart);
 
         // Calculate elapsed periods
-        let elapsed_periods = (now - vschedule.start) / (vschedule.cycle * 86400_000);      // 计算已过的周期数
-        let cliff = vschedule.cliff; // 提取cliff周期数
-        let vesting = vschedule.vesting; // 提取vesting周期数
+        let elapsed_periods = (now - vschedule.start) / (vschedule.cycle * 86400_000);
+        let cliff = vschedule.cliff;
+        let vesting = vschedule.vesting;
 
         let mut vprogress = w.mutate_field<Item, Progress<T>>(Item { id: vtid });
         // Create a claim balance

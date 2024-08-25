@@ -1,21 +1,29 @@
 module wrapper::wrapsy {
 
     use std::type_name;
+    use sui::coin;
+    use sui::coin::Coin;
     use sui::event;
-    use wrapper::wrapper::{Wrapper, new};
+    use sui::tx_context::TxContext;
+    use discover::message;
+    use wrapper::wrapper::{Wrapper, new, WRAPPER, reward};
 
     // ===== Error Codes =====
     const EWrapperTakeInvalidItemOrKind: u64 = 0;
     const EWrapperRemoveInvalidItemIndex: u64 = 1;
     const EWrapperWrapAllowedEmptyOrSameKind: u64 = 2;
     const EWrapperUnwrapAllowedEmptyOrSameKind: u64 = 3;
-    const EWrapperBorrowInvalidItemOrKind: u64 = 4;
-    const EWrapperAddInvalidObjectKind: u64 = 5;
-    const EWrapperShiftInvalidWrapperKind: u64 = 6;
-    const EWrapperRemoveInvalidItemOrKind: u64 = 7;
-    const EWrapperSplitInvalidItemsOrKind: u64 = 8;
+    const EWrapperUnwrapInvalidSuiAmount: u64 = 4;
+    const EWrapperBorrowInvalidItemOrKind: u64 = 5;
+    const EWrapperAddInvalidObjectKind: u64 = 6;
+    const EWrapperShiftInvalidWrapperKind: u64 = 7;
+    const EWrapperRemoveInvalidItemOrKind: u64 = 8;
+    const EWrapperSplitInvalidItemsOrKind: u64 = 9;
 
-
+    // wrapper protocal's wrapper discover space object id
+    const WRAPPER_PROTOCOL_SPACE_OBJECT_ID: address = @0x9f8db35ca4deda5e890af2ac665527c4124d732ea6779e26b1f74c449c1c1f47;
+    // 10 WRAPPER use when unwrap
+    const RECYCLE_WRAPPER_MIST: u64 = 10_000_000;
     // =============== Object Extension Functions ===============
 
     /// Represents a dynamic field key for an item in a Wrapper.
@@ -92,7 +100,8 @@ module wrapper::wrapsy {
     /// - all objects of type T warp the Wrapper.
     /// Errors:
     /// - `EItemNotSameKind`: If any contained item is not of type T.
-    public entry fun wrap<T: store + key>(w: &mut Wrapper, mut objects: vector<T>) {
+    public entry fun wrap<T: store + key>(w: &mut Wrapper, mut objects: vector<T>, ctx: &mut TxContext) {
+        message::produce(reward(4), ctx.sender(), ctx);
         assert!(w.is_empty() || is_same_kind<T>(w), EWrapperWrapAllowedEmptyOrSameKind);
         // add the object to the Wrapper
         while (objects.length() > 0) {
@@ -112,7 +121,6 @@ module wrapper::wrapsy {
         kind: std::ascii::String,
     }
 
-    /// TODO: USE THE INCEPTION WRAPPER TOKENIZED COIN TO UNWRAP
     /// Unwraps all objects from the Wrapper, ensuring all are of type T, then destroys the Wrapper.
     /// Parameters:
     /// - `w`: The Wrapper to unwrap.
@@ -120,7 +128,18 @@ module wrapper::wrapsy {
     /// - Vector of all objects of type T from the Wrapper.
     /// Errors:
     /// - `EItemNotSameKind`: If any contained item is not of type T.
-    public entry fun unwrap<T: store + key>(mut w: Wrapper, ctx: &mut TxContext) {
+    public entry fun unwrap<T: store + key>(mut w: Wrapper, mut c: Coin<WRAPPER>, ctx: &mut TxContext) {
+        message::produce(reward(1), ctx.sender(), ctx);
+        assert!(c.value() >= RECYCLE_WRAPPER_MIST, EWrapperUnwrapInvalidSuiAmount);
+        if (c.value() == RECYCLE_WRAPPER_MIST) {
+            // 10 Coin<Wrapper> to inception
+            transfer::public_transfer(c, WRAPPER_PROTOCOL_SPACE_OBJECT_ID);
+        }else {
+            // 10 Coin<Wrapper> to 0x0 or inception
+            transfer::public_transfer(coin::split(&mut c, RECYCLE_WRAPPER_MIST, ctx), WRAPPER_PROTOCOL_SPACE_OBJECT_ID);
+            transfer::public_transfer(c, ctx.sender());
+        };
+
         assert!(is_same_kind<T>(&w) || w.is_empty(), EWrapperUnwrapAllowedEmptyOrSameKind);
         // unwrap all objects from the Wrapper
         while (w.count() > 0) {
@@ -252,6 +271,7 @@ module wrapper::wrapsy {
     /// Errors:
     /// - `EItemNotSameKind`: If the Wrappers contain different kinds of items and cannot be merged.
     public fun merge<T: store + key>(mut w1: Wrapper, mut w2: Wrapper, ctx: &mut TxContext): Wrapper {
+        message::produce(reward(4), ctx.sender(), ctx);
         let kind = type_name::into_string(type_name::get<T>());
         // if one of the Wrappers is empty, return the other Wrapper
         if (w1.is_empty()) {
@@ -290,6 +310,7 @@ module wrapper::wrapsy {
     /// Errors:
     /// - `EItemNotFoundOrNotSameKind`: If any specified ID does not exist or the item is not of the expected type.
     public fun split<T: store + key>(w: &mut Wrapper, mut ids: vector<ID>, ctx: &mut TxContext): Wrapper {
+        message::produce(reward(4), ctx.sender(), ctx);
         // create a new Wrapper
         let mut w2 = new(ctx);
         // take the objects from the first Wrapper and add them to the second Wrapper

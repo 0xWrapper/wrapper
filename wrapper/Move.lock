@@ -2,10 +2,11 @@
 
 [move]
 version = 2
-manifest_digest = "85CC91FEA4B38832124C881B5696417D594FC2EDA64D2B7A2D7E9875B7AB2E26"
-deps_digest = "F8BBB0CCB2491CA29A3DF03D6F92277A4F3574266507ACD77214D37ECA3F3082"
+manifest_digest = "9236573C972DBA091017ABDF72039E014424F5A40231739D9032C486BD0B642B"
+deps_digest = "3C4103934B1E040BB6B23F1D610B4EF9F2F1166A50A104EADCF77467C004C600"
 dependencies = [
   { name = "Sui" },
+  { name = "discover" },
 ]
 
 [[move.package]]
@@ -20,8 +21,16 @@ dependencies = [
   { name = "MoveStdlib" },
 ]
 
+[[move.package]]
+name = "discover"
+source = { git = "https://github.com/0xWrapper/discover.git", rev = "sui/testnet", subdir = "sui/discover" }
+
+dependencies = [
+  { name = "Sui" },
+]
+
 [move.toolchain-version]
-compiler-version = "1.26.1"
+compiler-version = "1.27.2"
 edition = "2024.beta"
 flavor = "sui"
 
@@ -29,6 +38,12 @@ flavor = "sui"
 
 [env.test]
 chain-id = "4c78adac"
-original-published-id = "0xa2ee8f038a79540a43cb187a455937c8e48dba5e27d6219bf638d90e88b98626"
-latest-published-id = "0xa2ee8f038a79540a43cb187a455937c8e48dba5e27d6219bf638d90e88b98626"
+original-published-id = "0x8356b1b03b46d7b70aa3202a1656e6302262b07adc43680220a864be1cd96e6b"
+latest-published-id = "0x0b5ecf3fa9879c2bf118fac4831bee857bea5d352842b32afcf8fa2513e2c3b6"
+published-version = "2"
+
+[env.localnet]
+chain-id = "a85b49d7"
+original-published-id = "0x438caace696e62e06e0a5bc87c8514fd693d05411184969f62b149ebc70269af"
+latest-published-id = "0x438caace696e62e06e0a5bc87c8514fd693d05411184969f62b149ebc70269af"
 published-version = "1"

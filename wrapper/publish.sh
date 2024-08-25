@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# out=$(sui client publish --skip-dependency-verification --skip-fetch-latest-git-deps)
-out=$(sui client publish)
+ out=$(sui client publish --skip-dependency-verification --skip-fetch-latest-git-deps)
+#out=$(sui client publish)
 
 if [ $? -eq 0 ]; then
     echo "$out"

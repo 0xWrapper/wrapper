@@ -5,14 +5,20 @@ license = "Apache 2.0"
 authors = ["Euraxluo (euraxluo@outlook.com)"]
 version = "0.1.0"
 
-# testnet published-at 0x9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730
-# published-at = "0x9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730"
+# testnetv1 published-at 0x0
+# testnetv2 published-at 0x0
+# testnetv3 published-at 0x0
+# mainnetv1 published-at 0x0
+# mainnetv2 published-at 0x0
+# mainnetv3 published-at 0x0
+published-at = "0x0"
+
 
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
-# MoveStdlib = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "framework/testnet" }
+discover = { git = "https://github.com/0xWrapper/discover.git", subdir = "sui/discover", rev = "sui/testnet" }
 
 [addresses]
-# testnet "0x9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730"
-# wrapper = "0x9250d3529e1b5cc7aa81cd3bf9cb8ad3a102f1e1f7a45aead45f912a474c2730"
+# testnet "0x0"
+# mainnet "0x0"
 wrapper = "0x0"

@@ -1,7 +1,9 @@
 module wrapper::vesting {
 
     use std::ascii;
+    use std::string;
     use std::type_name;
+    use std::vector;
     use sui::balance;
     use sui::balance::Balance;
     use sui::bcs;
@@ -9,29 +11,42 @@ module wrapper::vesting {
     use sui::clock::Clock;
     use sui::coin;
     use sui::coin::Coin;
+    use sui::event;
+    use sui::event::emit;
     use sui::hash::blake2b256;
-    use wrapper::wrapper::{Wrapper, new};
+    use sui::math::max;
+    use sui::object;
+    use sui::tx_context::TxContext;
+    use discover::message;
+    use wrapper::wrapper::{Wrapper, new, reward};
 
     // === Vesting Error Codes ===
     const EWrapperVestingAllowedEmptyOrVesting: u64 = 0;
-    const EVestingCycleMustBeAtLeastOneDay: u64 = 1;
+    const EVestingCycleMustBeAtLeastOneMinute: u64 = 1;
     const EVestingInitialExceedsLimit: u64 = 2;
     const EVestingStartExceedsLimit: u64 = 3;
     const EVestingCycleMustGTECliffCycle: u64 = 4;
     const EVestingWrapperNotSchedule: u64 = 5;
     const EVestingWrapperHasReleased: u64 = 6;
-    const EVestingWrapperInvalidReleaseAmount: u64 = 6;
-    const EVestingWrapperInvalidRevokeAmount: u64 = 7;
-    const EVestingWrapperInvalidSeparateAmount: u64 = 8;
-    const EVestingWrapperInvalidSyncClaim: u64 = 9;
-    const EVestingWrapperClaimAllowedAfterScheduleStart: u64 = 9;
-    const EWrapperCombineAllowedVesting: u64 = 10;
-    const EVestingWrapperInvalidSchedule: u64 = 11;
+    const EVestingWrapperMustReleased: u64 = 7;
+    const EVestingWrapperMustNotReleased: u64 = 8;
+    const EVestingWrapperInvalidReleaseAmount: u64 = 9;
+    const EVestingWrapperInvalidRevokeAmount: u64 = 10;
+    const EVestingWrapperInvalidSeparateAmount: u64 = 11;
+    const EVestingWrapperInvalidSyncClaim: u64 = 12;
+    const EVestingWrapperClaimAllowedAfterScheduleStart: u64 = 13;
+    const EWrapperCombineAllowedVesting: u64 = 14;
+    const EVestingWrapperInvalidSchedule: u64 = 15;
 
     // ===== Wrapper Kind Constants =====
     const VESTING_WRAPPER_KIND: vector<u8> = b"VESTING WRAPPER";
 
-    const VESTING_DEPLOY_TIME_MS: u64 = 1_720_000_000_000; //7.3
+
+    //2024/7/3
+    const VESTING_DEPLOY_TIME_MS: u64 = 1_720_000_000_000;
+
+    //60s
+    const CYCLE_TIME_MS: u64 = 60 * 1000;
 
     // =============== Vesting Extension Functions ===============
 
@@ -57,7 +72,7 @@ module wrapper::vesting {
         initial: u64,
         // Initial release percentage in basis points
         cycle: u64,
-        // Vesting cycle duration in days
+        // Vesting cycle duration in minute
         start: u64,
         // Start time of the vesting schedule
     }
@@ -66,16 +81,42 @@ module wrapper::vesting {
     /// Each item in a Wrapper has a unique identifier of type ID.
     public struct Item has store, copy, drop { id: ID }
 
+
     /// Checks if the given wrapper is of vesting type.
     public fun is_vesting(w: &Wrapper): bool {
         w.kind() == std::ascii::string(VESTING_WRAPPER_KIND)
     }
 
     /// Generates a unique identifier for the given vesting schedule.
-    fun vesting_id<T>(vesting: &Schedule<T>): ID {
+    public fun vesting_id<T>(vesting: &Schedule<T>): ID {
         let mut v_bcs = bcs::to_bytes(vesting);
         vector::append(&mut v_bcs, bcs::to_bytes(&type_name::get<T>()));
         object::id_from_bytes(blake2b256(&v_bcs))
+    }
+
+    /// Returns the start timestamp of the vesting schedule.
+    public fun start_timestamp_ms<T>(vesting: &Schedule<T>): u64 {
+        vesting.start
+    }
+
+    /// Returns the initial percentage of the vesting schedule.
+    public fun initial<T>(vesting: &Schedule<T>): u64 {
+        vesting.initial
+    }
+
+    /// Returns the cliff period of the vesting schedule.
+    public fun cliff_cycle<T>(vesting: &Schedule<T>): u64 {
+        vesting.cliff
+    }
+
+    /// Returns the vesting period of the vesting schedule.
+    public fun vesting_cycle<T>(vesting: &Schedule<T>): u64 {
+        vesting.vesting
+    }
+
+    /// Returns the cycle duration of the vesting schedule.
+    public fun cycle_timestamp_ms<T>(vesting: &Schedule<T>): u64 {
+        vesting.cycle * 60 * 1000
     }
 
     /// Initializes a vesting schedule in the given wrapper.
@@ -94,16 +135,18 @@ module wrapper::vesting {
     /// - `EVestingCycleMustGTECliffCycle`: If the vesting period is less than the cliff period.
     public entry fun vesting<T>(w: &mut Wrapper, start: u64, initial: u64, cliff: u64, vesting: u64, cycle: u64) {
         assert!(is_vesting(w) || w.is_empty(), EWrapperVestingAllowedEmptyOrVesting);
-        assert!(cycle >= 1, EVestingCycleMustBeAtLeastOneDay);
+        assert!(cycle >= 1, EVestingCycleMustBeAtLeastOneMinute);
         assert!(initial <= 10_000, EVestingInitialExceedsLimit);
         assert!(start >= VESTING_DEPLOY_TIME_MS, EVestingStartExceedsLimit);
         assert!(vesting >= cliff, EVestingCycleMustGTECliffCycle);
 
+        // update vesting wrapper alias
+        let mut alias = b"VESTING ";
+        vector::append(&mut alias, type_name::get<T>().get_module().into_bytes());
+        w.set_alias(string::utf8(alias));
+
         let wvid = object::id(w);
-        if (w.is_empty()) {
-            w.set_kind(ascii::string(VESTING_WRAPPER_KIND));
-            w.add_field(Item { id: wvid }, Schedule<T> { start, initial, cliff, vesting, cycle });
-        }else if (w.is_empty() && is_vesting(w)) {
+        if (w.is_empty() && is_vesting(w)) {
             assert!(w.exists_field<Item, Schedule<T>>(Item { id: wvid }), EVestingWrapperNotSchedule);
             let schedule: &mut Schedule<T> = w.mutate_field<Item, Schedule<T>>(Item { id: wvid });
             schedule.start = start;
@@ -111,9 +154,18 @@ module wrapper::vesting {
             schedule.cliff = cliff;
             schedule.vesting = vesting;
             schedule.cycle = cycle;
+        }else if (w.is_empty()) {
+            w.set_kind(ascii::string(VESTING_WRAPPER_KIND));
+            w.add_field(Item { id: wvid }, Schedule<T> { start, initial, cliff, vesting, cycle });
         }else {
             abort EVestingWrapperHasReleased
         }
+    }
+
+    /// Event emitted when some coin released to the Wrapper.
+    public struct Released has copy, drop {
+        id: ID,
+        amount: u64,
     }
 
     /// Releases the vesting balance into the given wrapper.
@@ -121,49 +173,89 @@ module wrapper::vesting {
     /// - `w`: Mutable reference to the Wrapper.
     /// - `c`: Coin to be released into the vesting schedule.
     /// Errors:
-    /// - `EVestingWrapperHasReleased`: If the wrapper has already been released.
+    /// - `EVestingWrapperMustNotReleased`: If the wrapper has already been released.
     /// - `EVestingWrapperInvalidReleaseAmount`: If the coin value is invalid for release.
-    public entry fun release<T>(w: &mut Wrapper, c: Coin<T>) {
-        assert!(is_vesting(w) && w.is_empty(), EVestingWrapperHasReleased);
+    public entry fun release<T>(w: &mut Wrapper, c: Coin<T>, ctx: &mut TxContext) {
+        message::produce(reward(10), ctx.sender(), ctx);
+        assert!(is_vesting(w) && w.is_empty(), EVestingWrapperMustNotReleased);
         assert!(c.value() > 0, EVestingWrapperInvalidReleaseAmount);
         let vschedule = w.borrow_field<Item, Schedule<T>>(Item { id: object::id(w) });
         let initial_balance = c.value() / 10000 * vschedule.initial;
 
         // update state
-        let vid = vesting_id(vschedule);
-        w.add_item(vid.to_bytes());
         let mut vesting_balance = c.into_balance<T>();
         let vprogress = Progress {
-            id: vid,
+            id: vesting_id(vschedule),
             initial: balance::split<T>(&mut vesting_balance, initial_balance),
             vesting: vesting_balance,
             claimed: 0
         };
-        w.add_field(Item { id: vid }, vprogress);
+        process_release(w, vprogress);
     }
 
+    /// Add the release process as a dynamic field in a Released Vesting Wrapper
+    fun process_release<T>(w: &mut Wrapper, process: Progress<T>) {
+        assert!(is_vesting(w) && w.is_empty(), EVestingWrapperMustReleased);
+        event::emit(Released {
+            id: process.id,
+            amount: process.vesting.value() + process.initial.value(),
+        });
+        w.add_item(process.id.to_bytes());
+        w.add_field(Item { id: process.id }, process);
+    }
+
+
     /// Calculates the total amount available for vesting in the wrapper.
+    public fun total_amount<T>(w: &Wrapper): u64 {
+        assert!(is_vesting(w) && !w.is_empty(), EVestingWrapperMustReleased);
+        let vprogress = w.borrow_field<Item, Progress<T>>(Item { id: object::id_from_bytes(w.item(0)) });
+        vprogress.vesting.value() + vprogress.initial.value()
+    }
+
+    /// Calculates the amount available for vesting in the wrapper.
+    public fun initial_amount<T>(w: &Wrapper): u64 {
+        assert!(is_vesting(w) && !w.is_empty(), EVestingWrapperMustReleased);
+        let vprogress = w.borrow_field<Item, Progress<T>>(Item { id: object::id_from_bytes(w.item(0)) });
+        vprogress.initial.value()
+    }
+
+    /// Calculates the amount available for vesting in the wrapper.
+    public fun vesting_amount<T>(w: &Wrapper): u64 {
+        assert!(is_vesting(w) && !w.is_empty(), EVestingWrapperMustReleased);
+        let vprogress = w.borrow_field<Item, Progress<T>>(Item { id: object::id_from_bytes(w.item(0)) });
+        vprogress.vesting.value()
+    }
+
+    /// Calculates the claimed vesting cycle available for vesting in the wrapper.
+    public fun claimed_vesting<T>(w: &Wrapper): u64 {
+        assert!(is_vesting(w) && !w.is_empty(), EVestingWrapperMustReleased);
+        let vprogress = w.borrow_field<Item, Progress<T>>(Item { id: object::id_from_bytes(w.item(0)) });
+        vprogress.claimed
+    }
+
+
+    /// Retrieves the vesting schedule from the given wrapper.
     /// Parameters:
     /// - `w`: Reference to the Wrapper.
     /// Returns:
-    /// - The total amount available for vesting.
+    /// - The vesting schedule.
     /// Errors:
-    /// - `EVestingWrapperHasReleased`: If the wrapper has already been released.
-    public fun amount<T>(w: &Wrapper): u64 {
-        assert!(is_vesting(w) && !w.is_empty(), EVestingWrapperHasReleased);
-        let vprogress = w.borrow_field<Item, Progress<T>>(Item { id: object::id_from_bytes(w.item(0)) });
-        vprogress.vesting.value() + vprogress.initial.value()
+    /// - `EVestingWrapperMustReleased`: If the wrapper has already been released.
+    public fun schedule<T>(w: &Wrapper): &Schedule<T> {
+        assert!(is_vesting(w), EVestingWrapperMustReleased);
+        let vschedule = w.borrow_field<Item, Schedule<T>>(Item { id: object::id(w) });
+        vschedule
     }
 
     /// Revokes the vesting schedule in the given wrapper.
     /// Parameters:
     /// - `w`: Mutable reference to the Wrapper.
     /// Errors:
-    /// - `EVestingWrapperHasReleased`: If the wrapper has already been released.
+    /// - `EVestingWrapperMustReleased`: If the wrapper has already been released.
     /// - `EVestingWrapperInvalidRevokeAmount`: If the amount in the wrapper is not zero.
     public entry fun revoke<T>(mut w: Wrapper) {
-        assert!(is_vesting(&w) && !w.is_empty(), EVestingWrapperHasReleased);
-        assert!(amount<T>(&w) == 0, EVestingWrapperInvalidRevokeAmount);
+        assert!(is_vesting(&w) && !w.is_empty(), EVestingWrapperMustReleased);
+        assert!(total_amount<T>(&w) == 0, EVestingWrapperInvalidRevokeAmount);
 
         let wid = object::id(&w);
         let vtid = object::id_from_bytes(w.item(0));
@@ -176,11 +268,19 @@ module wrapper::vesting {
         balance::destroy_zero(initial);
         balance::destroy_zero(vesting);
 
-        w.remove_item(0);
         let Schedule { cliff: _, vesting: _, initial: _, cycle: _, start: _ } = w.remove_field<Item, Schedule<T>>(
             Item { id: wid }
         );
         w.destroy_empty();
+    }
+
+    /// Event emitted when vesting Separated.
+    public struct Separated has copy, drop {
+        id: ID,
+        cliamed: u64,
+        total_amount: u64,
+        amount1: u64,
+        amount2: u64,
     }
 
     #[allow(unused_mut)]
@@ -192,11 +292,12 @@ module wrapper::vesting {
     /// Returns:
     /// - A new Wrapper containing the split vesting schedule.
     /// Errors:
-    /// - `EVestingWrapperHasReleased`: If the wrapper has already been released.
+    /// - `EVestingWrapperMustReleased`: If the wrapper has already been released.
     /// - `EVestingWrapperInvalidSeparateAmount`: If the specified amount is invalid for separation.
     public fun separate<T>(w: &mut Wrapper, amount: u64, ctx: &mut TxContext): Wrapper {
-        assert!(is_vesting(w) && !w.is_empty(), EVestingWrapperHasReleased);
-        let total_value = amount<T>(w);
+        message::produce(reward(4), ctx.sender(), ctx);
+        assert!(is_vesting(w) && !w.is_empty(), EVestingWrapperMustReleased);
+        let total_value = total_amount<T>(w);
         assert!(amount < total_value, EVestingWrapperInvalidSeparateAmount);
 
         // create a new vesting
@@ -214,18 +315,36 @@ module wrapper::vesting {
         // get old vprogress
         let vtid = object::id_from_bytes(w.item(0));
         let mut vprogress = w.mutate_field<Item, Progress<T>>(Item { id: vtid });
+        let total_amount = vprogress.initial.value() + vprogress.vesting.value();
 
         // create a separate balance and release
-        let mut separate_balance = balance::zero<T>();
         let initial_split_amount = (vprogress.initial.value() * amount) / total_value;
-        balance::join(&mut separate_balance, balance::split(&mut vprogress.initial, initial_split_amount));
-        balance::join(&mut separate_balance, balance::split(&mut vprogress.vesting, amount - initial_split_amount));
-        release(&mut new_wrapper, coin::from_balance(separate_balance, ctx));
-        // update claimed
-
-        let mut new_vprogress = new_wrapper.mutate_field<Item, Progress<T>>(Item { id: vtid });
-        new_vprogress.claimed = vprogress.claimed;
+        let separate_initial_balance = balance::split<T>(&mut vprogress.initial, initial_split_amount);
+        let separate_vesting_balance = balance::split<T>(&mut vprogress.vesting, amount - initial_split_amount);
+        event::emit(Separated {
+            id: vtid,
+            cliamed: vprogress.claimed,
+            total_amount,
+            amount1: vprogress.initial.value() + vprogress.vesting.value(),
+            amount2: separate_initial_balance.value() + separate_vesting_balance.value()
+        });
+        // update new vesting progress state
+        process_release(&mut new_wrapper, Progress<T> {
+            id: vtid,
+            initial: separate_initial_balance,
+            vesting: separate_vesting_balance,
+            claimed: vprogress.claimed
+        });
         new_wrapper
+    }
+
+
+    /// Event emitted when vesting Claimed.
+    public struct Claimed has copy, drop {
+        id: ID,
+        cliamed: u64,
+        claim_amount: u64,
+        remanent: u64,
     }
 
     #[allow(unused_mut)]
@@ -235,18 +354,20 @@ module wrapper::vesting {
     /// - `clk`: Reference to the Clock.
     /// - `ctx`: Transaction context.
     /// Errors:
-    /// - `EVestingWrapperHasReleased`: If the wrapper has already been released.
+    /// - `EVestingWrapperMustReleased`: If the wrapper has already been released.
     /// - `EVestingWrapperClaimAllowedAfterScheduleStart`: If claiming is attempted before the vesting schedule starts.
-    public entry fun claim<T>(mut w: Wrapper, clk: &Clock, ctx: &mut TxContext) {
-        assert!(is_vesting(&w) && !w.is_empty(), EVestingWrapperHasReleased);
+    public entry fun claim<T>(w: &mut Wrapper, clk: &Clock, ctx: &mut TxContext) {
+        message::produce(reward(4), ctx.sender(), ctx);
+        assert!(is_vesting(w) && !w.is_empty(), EVestingWrapperMustReleased);
         let vtid = object::id_from_bytes(w.item(0));
 
-        let vschedule = w.borrow_field<Item, Schedule<T>>(Item { id: object::id(&w) });
+        let vschedule = w.borrow_field<Item, Schedule<T>>(Item { id: object::id(w) });
         let now = clock::timestamp_ms(clk);
         assert!(now >= vschedule.start, EVestingWrapperClaimAllowedAfterScheduleStart);
 
         // Calculate elapsed periods
-        let elapsed_periods = (now - vschedule.start) / (vschedule.cycle * 86400_000);
+        // one cycle is 60s == 6000 ms
+        let elapsed_periods = (now - vschedule.start) / (vschedule.cycle * CYCLE_TIME_MS);
         let cliff = vschedule.cliff;
         let vesting = vschedule.vesting;
 
@@ -275,17 +396,19 @@ module wrapper::vesting {
             }
         };
 
+        event::emit(Claimed {
+            id: vprogress.id,
+            cliamed: vprogress.claimed,
+            claim_amount: claim_balance.value(),
+            remanent: total_amount<T>(w),
+        });
+
         // transfer and destroy
         if (claim_balance.value() == 0) {
             balance::destroy_zero<T>(claim_balance);
         }else {
             transfer::public_transfer(coin::from_balance(claim_balance, ctx), ctx.sender());
         };
-        if (amount<T>(&w) == 0) {
-            revoke<T>(w);
-        }else {
-            transfer::public_transfer(w, ctx.sender());
-        }
     }
 
     /// Synchronizes the claimed amounts between two vesting progress objects.
@@ -318,6 +441,16 @@ module wrapper::vesting {
         );
     }
 
+
+    /// Event emitted when vesting Combined.
+    public struct Combined has copy, drop {
+        schedule_id: ID,
+        vesting1: ID,
+        vesting2: ID,
+        cliamed: u64,
+        total_amount: u64,
+    }
+
     /// Combines two vesting wrappers into one.
     /// Parameters:
     /// - `w1`: Mutable reference to the first Wrapper.
@@ -329,16 +462,23 @@ module wrapper::vesting {
     /// - `EVestingWrapperInvalidSchedule`: If the vesting schedules of the two wrappers are not the same.
     public fun combine<T>(mut w1: Wrapper, mut w2: Wrapper): Wrapper {
         assert!(is_vesting(&w1) && is_vesting(&w2), EWrapperCombineAllowedVesting);
-        assert!(w1.item(0) == w2.item(0), EVestingWrapperInvalidSchedule) ;
-        let borrow_vschedule: &Schedule<T> = w1.borrow_field<Item, Schedule<T>>(
-            Item { id: object::id_from_bytes(w1.item(0)) }
-        );
+        assert!(w1.item(0) == w2.item(0), EVestingWrapperInvalidSchedule);
+        let borrow_vschedule = schedule<T>(&w1);
         let vschedule: Schedule<T> = *borrow_vschedule;
+
+        emit(Combined {
+            schedule_id: vesting_id(&vschedule),
+            vesting1: object::id(&w1),
+            vesting2: object::id(&w2),
+            cliamed: max(claimed_vesting<T>(&w1), claimed_vesting<T>(&w2)),
+            total_amount: total_amount<T>(&w1) + total_amount<T>(&w2),
+        });
+
         // if one of the Vesting is zero, return the other Wrapper
-        if (amount<T>(&w1) == 0) {
+        if (total_amount<T>(&w1) == 0) {
             revoke<T>(w1);
             w2
-        } else if (amount<T>(&w2) == 0) {
+        } else if (total_amount<T>(&w2) == 0) {
             revoke<T>(w2);
             w1
         } else {
@@ -368,6 +508,13 @@ module wrapper::vesting {
                     w2
                 }
             }
+        }
+    }
+
+    #[test_only]
+    public fun item_for_testing(id: ID): Item {
+        Item {
+            id
         }
     }
 }

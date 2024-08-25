@@ -9,10 +9,10 @@ module wrapper::wrapper {
     use std::type_name;
     use sui::dynamic_object_field as dof;
     use sui::dynamic_field as df;
-    use sui::display;
-    use sui::package;
     use sui::event;
+    use wrapper::wrap::init_coin;
     use sui::transfer::Receiving;
+    use discover::message;
 
     // ===== Error Codes =====
     const EWrapperNotEmpty: u64 = 0;
@@ -20,7 +20,6 @@ module wrapper::wrapper {
 
     // ===== Wrapper Kind Constants =====
     const EMPTY_WRAPPER_KIND: vector<u8> = b"EMPTY WRAPPER";
-
     // ===== Wrapper Core Struct =====
 
     /// A one-time witness object used for claiming packages and transferring ownership within the Sui framework.
@@ -52,10 +51,10 @@ module wrapper::wrapper {
     /// Event emitted when Wrapper Protocal is initialized.
     public struct Init has copy, drop {
         creater: address,
-        publisher: ID,
-        display: ID,
+        incentive: ID,
         inception: ID,
     }
+
 
     #[lint_allow(self_transfer)]
     /// Initializes a new Wrapper and sets up its display and publisher.
@@ -66,33 +65,15 @@ module wrapper::wrapper {
     /// Effect:
     /// - Transfers the ownership of the publisher and display to the transaction sender.
     fun init(witness: WRAPPER, ctx: &mut TxContext) {
-        let publisher = package::claim(witness, ctx);
-        let keys = vector[
-            std::string::utf8(b"kind"),
-            std::string::utf8(b"alias"),
-            std::string::utf8(b"image_url"),
-            std::string::utf8(b"project_url"),
-        ];
-        let values = vector[
-            std::string::utf8(b"{kind}"),
-            std::string::utf8(b"{alias}"),
-            std::string::utf8(b"{content}"),
-            std::string::utf8(b"https://wrapper.space"),
-        ];
-        let mut display = display::new_with_fields<Wrapper>(&publisher, keys, values, ctx);
-        display::update_version<Wrapper>(&mut display);
-        // Genesis Wrapper
-        let genesis = inception(ctx);
+        let genesis = init_inception(ctx);
+        let treasury = init_coin(witness, ctx);
         event::emit(Init {
             creater: tx_context::sender(ctx),
-            publisher: object::id(&publisher),
-            display: object::id(&display),
+            incentive: object::id(&treasury),
             inception: object::id(&genesis),
         });
-
-        transfer::public_transfer(genesis, tx_context::sender(ctx));
-        transfer::public_transfer(publisher, tx_context::sender(ctx));
-        transfer::public_transfer(display, tx_context::sender(ctx));
+        transfer::public_transfer(treasury, ctx.sender());
+        transfer::public_transfer(genesis, ctx.sender());
     }
 
 
@@ -103,12 +84,26 @@ module wrapper::wrapper {
         id: ID,
     }
 
+    /// PointsMessage emitted when Wrapper is created.
+    /// Send to Wrapper Discover Space Cap
+    public struct PointsMessage has store {
+        points: u64,
+    }
+
+    /// get a reward points
+    public(package) fun reward(points: u64): PointsMessage {
+        PointsMessage {
+            points
+        }
+    }
+
     /// Creates a new, empty Wrapper.
     /// Parameters:
     /// - `ctx`: Transaction context used for creating the Wrapper.
     /// Returns:
     /// - A new Wrapper with no items and a generic kind.
     public fun new(ctx: &mut TxContext): Wrapper {
+        message::produce(reward(6), ctx.sender(), ctx);
         let id = object::new(ctx);
         event::emit(Created {
             creater: tx_context::sender(ctx),
@@ -392,7 +387,7 @@ module wrapper::wrapper {
         df::remove<K, V>(&mut w.id, k)
     }
 
-    // ===== Inception Kind Constants =====
+    // ===== Inception =====
 
     const INCEPTION_WRAPPER_KIND: vector<u8> = b"INCEPTION WRAPPER";
 
@@ -406,7 +401,7 @@ module wrapper::wrapper {
     }
 
     /// Creates a new Wrapper with the INKSCRIPTION kind.
-    fun inception(ctx: &mut TxContext): Wrapper {
+    fun init_inception(ctx: &mut TxContext): Wrapper {
         let mut inception = new(ctx);
         inception.set_kind(ascii::string(INCEPTION_WRAPPER_KIND));
         inception.set_alias(std::string::utf8(b"The Dawn of Wrapper Protocol"));
@@ -445,5 +440,11 @@ module wrapper::wrapper {
         inception.add_item(b"With every step, we redefine,");
         inception.add_item(b"A future bright, in Wrapper's line.");
         inception
+    }
+
+
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(WRAPPER {}, ctx);
     }
 }

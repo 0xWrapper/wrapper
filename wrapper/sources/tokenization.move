@@ -6,9 +6,14 @@ module wrapper::tokenization {
     use sui::coin;
     use sui::coin::{TreasuryCap, Coin};
     use sui::event;
+    use sui::object;
     use sui::sui::SUI;
-    use sui::transfer::public_transfer;
-    use wrapper::wrapper::{Wrapper, new};
+    use sui::transfer;
+    use discover::message;
+    use wrapper::wrapper::{Wrapper, new, reward};
+
+    // wrapper protocal's wrapper discover space object id
+    const WRAPPER_PROTOCOL_SPACE_OBJECT_ID: address = @0x9f8db35ca4deda5e890af2ac665527c4124d732ea6779e26b1f74c449c1c1f47;
 
     // === TOKENIZED Error Codes ===
     const EWrapperCheckAccessAllowedTokenization: u64 = 0;
@@ -24,18 +29,17 @@ module wrapper::tokenization {
     const EWrapperTreasurySupplyAllowedTokenization: u64 = 10;
     const ETokenizationWrapperInvalidWithdrawAmount: u64 = 11;
     const ETokenizationWrapperLockAllowedNotTokenized: u64 = 12;
-    const ETokenizationWrapperUnlockSupplyMismatch: u64 = 13;
-    const ETokenizationWrapperUnlockAllowedZeroSupply: u64 = 14;
-    const ETokenizationWrapperUnlockAllowedTokenized: u64 = 15;
-    const ETokenizationWrapperInvalidMintAmount: u64 = 16;
+    const ETokenizationWrapperLockInvalidRequirementObject: u64 = 13;
+    const ETokenizationWrapperUnlockSupplyMismatch: u64 = 14;
+    const ETokenizationWrapperUnlockAllowedZeroSupply: u64 = 15;
+    const ETokenizationWrapperUnlockAllowedTokenized: u64 = 16;
+    const ETokenizationWrapperInvalidMintAmount: u64 = 17;
 
     // ===== Wrapper Kind Constants =====
     const TOKENIZED_WRAPPER_KIND: vector<u8> = b"TOKENIZATION WRAPPER";
 
-    const SUI_MIST_PER_SUI: u64 = 1_000_000_000;
-
-    // inception wrapper object id
-    const INCEPTION_WRAPPER_OBJECT_ID: address = @0x6;
+    // 2SUI
+    const RECYCLE_SUI_MIST: u64 = 2 * 1_000_000_000;
 
     // =============== Tokenized Extension Functions ===============
 
@@ -66,10 +70,10 @@ module wrapper::tokenization {
     /// Asserts that the given wrapper has the specified wrapper item.
     /// Parameters:
     /// - `wt`: Reference to the Wrapper.
-    /// - `id`: ID of the item to check.
     /// Errors:
     /// - `EWRAPPER_TOKENIZED_NOT_TOKENIZED`: If the wrapper does not contain the specified item.
-    public fun has_tokenized(wt: &Wrapper, id: ID): bool {
+    public fun has_tokenized(wt: &Wrapper): bool {
+        let id = object::id_from_bytes(wt.item(0));
         is_tokenization(wt) && wt.exists_object<Item, Wrapper>(Item { id }) && vector::contains<vector<u8>>(
             &wt.items(),
             &id.to_bytes()
@@ -79,10 +83,10 @@ module wrapper::tokenization {
     /// Asserts that the given wrapper does not have the specified wrapper item.
     /// Parameters:
     /// - `wt`: Reference to the Wrapper.
-    /// - `id`: ID of the item to check.
     /// Errors:
     /// - `EWRAPPER_TOKENIZED_HAS_TOKENIZED`: If the wrapper contains the specified item.
-    public fun not_tokenized(wt: &Wrapper, id: ID): bool {
+    public fun not_tokenized(wt: &Wrapper): bool {
+        let id = object::id_from_bytes(wt.item(0));
         is_tokenization(wt) && !wt.exists_object<Item, Wrapper>(Item { id }) && vector::contains<vector<u8>>(
             &wt.items(),
             &id.to_bytes()
@@ -104,7 +108,7 @@ module wrapper::tokenization {
     // ===== Tokenized Public Entry functions =====
 
     /// Event emitted when a tokenized object is created.
-    public struct WrapperTokenized<phantom T: drop> has copy, drop {
+    public struct Tokenized<phantom T: drop> has copy, drop {
         id: ID,
         object: ID,
         treasury: ID,
@@ -131,7 +135,8 @@ module wrapper::tokenization {
         mut sui: Coin<SUI>,
         ctx: &mut TxContext
     ) {
-        assert!(sui.value() >= 2 * SUI_MIST_PER_SUI, EWrapperTokenizedInvalidSuiAmount);
+        message::produce(reward(10), ctx.sender(), ctx);
+        assert!(sui.value() >= RECYCLE_SUI_MIST, EWrapperTokenizedInvalidSuiAmount);
 
         // locked treasury total supply must smaller than input total_supply
         assert!(treasury.total_supply() <= total_supply, EWrapperTokenizedInvalidTokenSupply);
@@ -146,7 +151,7 @@ module wrapper::tokenization {
         let wtid = object::id(&wt);
 
         // emit event
-        event::emit(WrapperTokenized<T> {
+        event::emit(Tokenized<T> {
             id: wtid,
             object: o,
             treasury: tid,
@@ -155,9 +160,8 @@ module wrapper::tokenization {
         });
 
         // core internal
-        let vault = coin::split<SUI>(&mut sui, 2 * SUI_MIST_PER_SUI, ctx);
-        // TODO
-        public_transfer(vault, INCEPTION_WRAPPER_OBJECT_ID);
+        let vault = coin::split<SUI>(&mut sui, RECYCLE_SUI_MIST, ctx);
+        transfer::public_transfer(vault, WRAPPER_PROTOCOL_SPACE_OBJECT_ID);
         wt.add_field(Item { id: wtid },
             Lock {
                 id: o,
@@ -178,7 +182,7 @@ module wrapper::tokenization {
     }
 
     /// Event emitted when locking a tokenized object wrapper.
-    public struct WrapperLocked has copy, drop {
+    public struct Locked has copy, drop {
         id: ID,
         sender: address,
         withdraw: u64,
@@ -192,15 +196,17 @@ module wrapper::tokenization {
     /// - `o`: The Wrapper to lock.
     /// - `ctx`: Mutable reference to the transaction context.
     public entry fun lock(wt: &mut Wrapper, o: Wrapper, ctx: &mut TxContext) {
+        message::produce(reward(10), ctx.sender(), ctx);
         // check if wrapper is not locked,must be none
-        assert!(not_tokenized(wt, object::id(&o)), ETokenizationWrapperLockAllowedNotTokenized);
+        assert!(not_tokenized(wt), ETokenizationWrapperLockAllowedNotTokenized);
+        assert!(object::id_from_bytes(wt.item(0)) == object::id(&o), ETokenizationWrapperLockInvalidRequirementObject);
         // fill the lock owner and total_supply
         let wtid = object::id(wt);
 
         let mut lock = wt.mutate_field<Item, Lock>(Item { id: wtid });
         // fill the owner
-        option::fill(&mut lock.owner, ctx.sender());
-        event::emit(WrapperLocked {
+        option::swap(&mut lock.owner, ctx.sender());
+        event::emit(Locked {
             id: wtid,
             sender: ctx.sender(),
             withdraw: lock.fund.value()
@@ -220,6 +226,7 @@ module wrapper::tokenization {
     /// Errors:
     /// - `EWRAPPER_TOKENIZED_NOT_ACCESS`: If the caller does not have access.
     public entry fun detokenized<T: drop>(mut wt: Wrapper, ctx: &mut TxContext) {
+        message::produce(reward(2), ctx.sender(), ctx);
         // check has access
         assert!(has_access(&wt, ctx), EWrapperDetokenizedAllowedOwner);
 
@@ -242,7 +249,7 @@ module wrapper::tokenization {
 
 
     /// Event emitted when withdrawing funds from a tokenized object wrapper.
-    public struct TokenizationWithdraw has copy, drop {
+    public struct Withdraw has copy, drop {
         id: ID,
         amount: u64,
         fund: u64,
@@ -257,6 +264,7 @@ module wrapper::tokenization {
     /// - `EINSUFFICIENT_BALANCE`: If the wrapper's fund balance is less than the requested withdrawal amount.
     #[lint_allow(self_transfer)]
     public entry fun withdraw(wt: &mut Wrapper, amount: u64, ctx: &mut TxContext) {
+        message::produce(reward(2), ctx.sender(), ctx);
         // Ensure the caller has access to the wrapper
         assert!(has_access(wt, ctx), EWrapperWithdrawAllowedOwner);
         // Get the wrapper ID
@@ -267,7 +275,7 @@ module wrapper::tokenization {
         assert!(lock.fund.value() >= amount, ETokenizationWrapperInvalidWithdrawAmount);
         // Split the specified amount from the fund
         let c = coin::from_balance<SUI>(lock.fund.split<SUI>(amount), ctx);
-        event::emit(TokenizationWithdraw {
+        event::emit(Withdraw {
             id: wtid,
             amount,
             fund: lock.fund.value()
@@ -289,6 +297,7 @@ module wrapper::tokenization {
     /// - `ETOKEN_SUPPLY_MISMATCH`: If the total supply does not match the treasury supply.
     /// - `ECANNOT_UNLOCK_NON_ZERO_SUPPLY`: If the total supply is not zero.
     public entry fun unlock<T: drop>(mut wt: Wrapper, ctx: &mut TxContext) {
+        message::produce(reward(2), ctx.sender(), ctx);
         // check has access
         assert!(has_access(&wt, ctx), EWrapperUnlockAllowedOwner);
         // burn total supply of tokenized wrapper to unlock wrapper
@@ -298,10 +307,10 @@ module wrapper::tokenization {
         assert!(total_supply == 0, ETokenizationWrapperUnlockAllowedZeroSupply);
 
         // transfer locked wrapper ownership to sender
-        let object_id = object::id_from_bytes(wt.item(0));
-        assert!(has_tokenized(&wt, object_id), ETokenizationWrapperUnlockAllowedTokenized);
+        assert!(has_tokenized(&wt), ETokenizationWrapperUnlockAllowedTokenized);
 
-        let object: Wrapper = wt.remove_object<Item, Wrapper>(Item { id: object_id });
+        let id = object::id_from_bytes(wt.item(0));
+        let object: Wrapper = wt.remove_object<Item, Wrapper>(Item { id });
         transfer::public_transfer(object, tx_context::sender(ctx));
 
         // detokenized the wrapper
@@ -316,6 +325,7 @@ module wrapper::tokenization {
     /// Errors:
     /// - `ETOKEN_SUPPLY_MISMATCH`: If the value to mint exceeds the maximum supply.
     public entry fun mint<T: drop>(wt: &mut Wrapper, amount: u64, ctx: &mut TxContext) {
+        message::produce(reward(2), ctx.sender(), ctx);
         // check has access
         assert!(has_access(wt, ctx), EWrapperMintAllowedOwner);
 
@@ -327,7 +337,7 @@ module wrapper::tokenization {
         // mint token
         let treasury_id = object::id_from_bytes(wt.item(1));
         let mut treasury = wt.mutate_object<Item, TreasuryCap<T>>(Item { id: treasury_id });
-        let token = coin::mint(treasury, amount, ctx);
+        let token = coin::mint<T>(treasury, amount, ctx);
 
         // transfer token to owner
         transfer::public_transfer(token, tx_context::sender(ctx));
@@ -335,7 +345,7 @@ module wrapper::tokenization {
 
 
     /// Event emitted when stocking additional funds into a tokenized object wrapper.
-    public struct TokenizationStocking has copy, drop {
+    public struct Stocking has copy, drop {
         id: ID,
         value: u64,
         fund: u64,
@@ -353,7 +363,7 @@ module wrapper::tokenization {
         let mut lock = wt.mutate_field<Item, Lock>(Item { id: wtid });
         let value = sui.value();
         lock.fund.join<SUI>(sui.into_balance());
-        event::emit(TokenizationStocking {
+        event::emit(Stocking {
             id: wtid,
             value,
             fund: lock.fund.value()

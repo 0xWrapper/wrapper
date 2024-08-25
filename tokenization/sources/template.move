@@ -1,12 +1,10 @@
 /// Module: template
-module tokenization::T_6ee7597e7344c205d78979d8052dfae85b2ae01bee40a0abb287d33cdcacc204 {
+module tokenization::template {
+    use sui::coin;
     use sui::url;
-    use sui::address;
-    use sui::coin::{Self, Coin, TreasuryCap};
+    use sui::transfer::{public_transfer, public_freeze_object};
 
-    use wrapper::wrapper::{Self,Wrapper};
-
-    public struct T_6EE7597E7344C205D78979D8052DFAE85B2AE01BEE40A0ABB287D33CDCACC204 has drop {}
+    public struct TEMPLATE has drop {}
 
     const LOCKED_OBJECT: vector<u8> = b"6ee7597e7344c205d78979d8052dfae85b2ae01bee40a0abb287d33cdcacc204";
     const TOTAL_SUPPLY: u64 = 100000000000000;
@@ -18,16 +16,18 @@ module tokenization::T_6ee7597e7344c205d78979d8052dfae85b2ae01bee40a0abb287d33cd
     const ICON_URL: vector<u8> = b"https://th.bing.com/th/id/OIP.KIbQVW995sdomP7hAushQgHaHa";
 
 
-    fun init(otw: T_6EE7597E7344C205D78979D8052DFAE85B2AE01BEE40A0ABB287D33CDCACC204, ctx: &mut TxContext) {
-        wrapper::register<T_6EE7597E7344C205D78979D8052DFAE85B2AE01BEE40A0ABB287D33CDCACC204>(
+    fun init(otw: TEMPLATE, ctx: &mut TxContext) {
+        // TEMPLATE Coin
+        let (treasury, metadata) = coin::create_currency(
             otw,
             DECIMALS,
             SYMBOL,
             NAME,
             DESCRIPTION,
-            ICON_URL,
-            address::from_ascii_bytes(&LOCKED_OBJECT),
+            option::some(url::new_unsafe_from_bytes(ICON_URL)),
             ctx
         );
+        public_freeze_object(metadata);
+        public_transfer(treasury, ctx.sender());
     }
 }

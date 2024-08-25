@@ -2,6 +2,7 @@ module wrapper::inkscription {
 
     use std::ascii;
     use std::string;
+    use std::vector;
     use sui::event;
     use wrapper::wrapper::Wrapper;
 
@@ -40,19 +41,20 @@ module wrapper::inkscription {
     /// - `ink`: The string to be inscribed.
     /// Errors:
     /// - `EWrapperNotEmptyOrInkSciption`: If the Wrapper is neither empty nor an inscription.
-    public entry fun inkscribe(w: &mut Wrapper, mut ink: vector<std::string::String>) {
+    public entry fun inkscribe(w: &mut Wrapper, mut inks: vector<std::string::String>) {
         assert!(is_inkscription(w) || w.is_empty(), EWrapperScribAllowedEmptyOrInkSciption);
         if (w.is_empty()) {
             w.set_kind(ascii::string(INKSCRIPTION_WRAPPER_KIND));
         };
         event::emit(Scribed {
             id: object::id(w),
-            inks: ink.length(),
+            inks: inks.length(),
         });
-        while (ink.length() > 0) {
-            w.add_item(*string::bytes(&ink.pop_back()));
+        vector::reverse(&mut inks);
+        while (inks.length() > 0) {
+            w.add_item(*string::bytes(&inks.pop_back()));
         };
-        ink.destroy_empty();
+        inks.destroy_empty();
     }
 
     /// Event emitted when some ink is erased from the Wrapper.
